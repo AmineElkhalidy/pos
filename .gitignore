@@ -1,0 +1,17 @@
+# Environment & secrets
+.env
+.env.*
+secret_tokens.txt
+
+# Dependencies & build outputs
+node_modules/
+out/
+dist/
+release/
+*.tsbuildinfo
+
+# Logs & temporary files
+*.log
+*.tmp
+*.DS_Store
+Thumbs.db

@@ -1,0 +1,30 @@
+appId: com.smartpos.desktop
+productName: Smart POS
+copyright: Copyright © 2026 Smart POS
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - "**/*.node"
+npmRebuild: false
+electronDist: node_modules/electron/dist
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  executableName: Smart POS
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Smart POS
+  uninstallDisplayName: Smart POS
+  deleteAppDataOnUninstall: false
+
