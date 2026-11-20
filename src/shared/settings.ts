@@ -141,7 +141,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     networkPort: 9100,
     serialPath: '',
     serialBaud: 9600,
-    headerText: '',
+    headerText: 'Bienvenue ! مرحبا بكم',
     footerText: 'Merci pour votre visite ! شكرا لزيارتكم',
     showLogo: true,
     autoPrint: false,

@@ -128,9 +128,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
       {/* Persistent Navy Sidebar */}
       <aside className="flex w-64 shrink-0 flex-col bg-[#0f172a] text-slate-200 shadow-xl">
         <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shadow">
-            <Store className="h-5 w-5" />
-          </div>
+          {settings?.store.logoDataUrl ? (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow">
+              <img
+                src={settings.store.logoDataUrl}
+                alt={settings.store.name || t.appName}
+                className="h-full w-full object-contain"
+              />
+            </div>
+          ) : (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow">
+              <Store className="h-5 w-5" />
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="truncate text-base font-bold tracking-tight text-white">
               {settings?.store.name || t.appName}

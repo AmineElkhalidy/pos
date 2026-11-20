@@ -19,6 +19,8 @@ import {
 import { getAlertCounts, getDashboardData } from '../src/main/services/reports'
 import { initLogger, logger } from '../src/main/services/logger'
 import { bumpDataRevision, type Ctx } from '../src/main/services/common'
+import { updateSettings } from '../src/main/services/settings'
+import { buildSaleReceiptHtml } from '../src/main/services/printing'
 
 describe('Smart POS — Security, Data Integrity & Reliability Suite', () => {
   let tempDir: string
@@ -276,6 +278,57 @@ describe('Smart POS — Security, Data Integrity & Reliability Suite', () => {
     expect(content).not.toContain('SuperSecretPassword123!')
     expect(content).not.toContain('sk-123456')
     expect(content).not.toContain('abc-xyz')
+  })
+
+  it('persists store logo, official phone, and welcoming message and renders them on client receipts', () => {
+    const sampleLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    updateSettings(adminCtx, {
+      store: {
+        name: 'Épicerie Atlas',
+        address: '12 Bd Mohammed V, Casablanca',
+        phone: '+212 5 22 11 22 33',
+        email: 'contact@atlas.ma',
+        ice: '001234567000089',
+        taxId: '',
+        logoDataUrl: sampleLogo
+      },
+      receipt: {
+        paperWidth: 80,
+        mode: 'driver',
+        printerName: '',
+        networkHost: '192.168.1.100',
+        networkPort: 9100,
+        serialPath: '',
+        serialBaud: 9600,
+        headerText: 'Bienvenue chez Épicerie Atlas ! مرحبا بكم',
+        footerText: 'Merci pour votre achat !',
+        showLogo: true,
+        autoPrint: false,
+        copies: 1,
+        openDrawer: false,
+        bilingual: true
+      }
+    })
+
+    const pid = saveProduct(adminCtx, null, {
+      nameFr: 'Lait 1L',
+      unitCode: 'pc',
+      productType: 'standard',
+      purchasePrice: '6',
+      salePrice: '8',
+      initialStock: '20'
+    })
+    const sale = createSale(adminCtx, {
+      items: [{ productId: pid, qty: '1' }],
+      payments: [{ method: 'CASH', amount: '8' }]
+    })
+
+    const html = buildSaleReceiptHtml(db, sale.id)
+    expect(html).toContain(sampleLogo)
+    expect(html).toContain('Épicerie Atlas')
+    expect(html).toContain('+212 5 22 11 22 33')
+    expect(html).toContain('Bienvenue chez Épicerie Atlas ! مرحبا بكم')
+    expect(html).toContain('Merci pour votre achat !')
   })
 })
 

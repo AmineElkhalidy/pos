@@ -39,6 +39,12 @@ function escapeHtml(s: string | null | undefined): string {
     .replace(/"/g, '&quot;')
 }
 
+function safeLogoDataUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  const trimmed = url.trim()
+  return /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(trimmed) ? trimmed : null
+}
+
 /** Builds complete thermal receipt HTML (58mm or 80mm) for preview, driver printing, or PDF export. */
 export function buildSaleReceiptHtml(db: DB, saleId: number, overrideWidth?: 58 | 80): string {
   const settings = getSettings(db)
@@ -47,6 +53,7 @@ export function buildSaleReceiptHtml(db: DB, saleId: number, overrideWidth?: 58 
   const bilingual = settings.receipt.bilingual
   const dt = new Date(sale.createdAt).toLocaleString('fr-MA')
   const discountTotal = sale.linesDiscountCents + sale.cartDiscountCents
+  const logoSrc = settings.receipt.showLogo ? safeLogoDataUrl(settings.store.logoDataUrl) : null
 
   const rowsHtml = sale.items
     .map((it) => {
@@ -103,17 +110,19 @@ export function buildSaleReceiptHtml(db: DB, saleId: number, overrideWidth?: 58 
   .item-total { width: 28%; text-align: right; font-weight: 600; white-space: nowrap; }
   .sub { font-size: 0.88em; color: #333; }
   .ar { direction: rtl; font-size: 0.92em; }
-  .logo { max-width: 45%; max-height: 16mm; margin: 0 auto 3px; display: block; }
+  .logo { max-width: 55%; max-height: 20mm; object-fit: contain; margin: 0 auto 4px; display: block; }
+  .welcome { font-size: 0.95em; font-weight: 600; margin-top: 3px; }
 </style>
 </head>
 <body>
   <div class="center">
-    ${settings.receipt.showLogo && settings.store.logoDataUrl ? `<img class="logo" src="${settings.store.logoDataUrl}" />` : ''}
+    ${logoSrc ? `<img class="logo" src="${logoSrc}" alt="Logo" />` : ''}
     <div class="store-title">${escapeHtml(settings.store.name || 'Smart POS')}</div>
     ${settings.store.address ? `<div class="muted">${escapeHtml(settings.store.address)}</div>` : ''}
-    ${settings.store.phone ? `<div class="muted">Tél: ${escapeHtml(settings.store.phone)}</div>` : ''}
+    ${settings.store.phone ? `<div class="muted">Tél / الهاتف: ${escapeHtml(settings.store.phone)}</div>` : ''}
+    ${settings.store.email ? `<div class="muted">${escapeHtml(settings.store.email)}</div>` : ''}
     ${settings.store.ice ? `<div class="muted">ICE: ${escapeHtml(settings.store.ice)}</div>` : ''}
-    ${settings.receipt.headerText ? `<div class="muted">${escapeHtml(settings.receipt.headerText)}</div>` : ''}
+    ${settings.receipt.headerText ? `<div class="welcome">${escapeHtml(settings.receipt.headerText)}</div>` : ''}
   </div>
   <div class="divider"></div>
   <div class="row"><span>Facture / فاتورة:</span><b>${escapeHtml(sale.invoiceNo)}</b></div>
@@ -145,6 +154,7 @@ export function buildCustomerPaymentReceiptHtml(db: DB, paymentId: number): stri
   const p = getCustomerPayment(db, paymentId)
   const widthMm = settings.receipt.paperWidth
   const dt = new Date(p.createdAt).toLocaleString('fr-MA')
+  const logoSrc = settings.receipt.showLogo ? safeLogoDataUrl(settings.store.logoDataUrl) : null
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -155,6 +165,9 @@ export function buildCustomerPaymentReceiptHtml(db: DB, paymentId: number): stri
   body { font-family: 'Segoe UI', Tahoma, sans-serif; width: ${widthMm - 4}mm; margin: 0 auto; padding: 2mm; font-size: 11.5px; }
   .center { text-align: center; }
   .title { font-size: 14px; font-weight: 800; }
+  .muted { font-size: 0.9em; color: #222; }
+  .welcome { font-size: 0.95em; font-weight: 600; margin-top: 3px; }
+  .logo { max-width: 55%; max-height: 20mm; object-fit: contain; margin: 0 auto 4px; display: block; }
   .divider { border-top: 1px dashed #000; margin: 6px 0; }
   .row { display: flex; justify-content: space-between; margin: 3px 0; }
   .bold { font-weight: 700; }
@@ -162,8 +175,12 @@ export function buildCustomerPaymentReceiptHtml(db: DB, paymentId: number): stri
 </head>
 <body>
   <div class="center">
+    ${logoSrc ? `<img class="logo" src="${logoSrc}" alt="Logo" />` : ''}
     <div class="title">${escapeHtml(settings.store.name || 'Smart POS')}</div>
-    ${settings.store.phone ? `<div>Tél: ${escapeHtml(settings.store.phone)}</div>` : ''}
+    ${settings.store.address ? `<div class="muted">${escapeHtml(settings.store.address)}</div>` : ''}
+    ${settings.store.phone ? `<div class="muted">Tél / الهاتف: ${escapeHtml(settings.store.phone)}</div>` : ''}
+    ${settings.store.ice ? `<div class="muted">ICE: ${escapeHtml(settings.store.ice)}</div>` : ''}
+    ${settings.receipt.headerText ? `<div class="welcome">${escapeHtml(settings.receipt.headerText)}</div>` : ''}
     <div class="bold" style="margin-top:4px;">REÇU DE RÈGLEMENT CLIENT / وصل أداء</div>
   </div>
   <div class="divider"></div>
@@ -329,6 +346,8 @@ export function buildSaleEscPosBuffer(db: DB, saleId: number): Buffer {
   ]
   if (settings.store.address) chunks.push(Buffer.from(`${settings.store.address}\n`, 'utf8'))
   if (settings.store.phone) chunks.push(Buffer.from(`Tel: ${settings.store.phone}\n`, 'utf8'))
+  if (settings.store.ice) chunks.push(Buffer.from(`ICE: ${settings.store.ice}\n`, 'utf8'))
+  if (settings.receipt.headerText) chunks.push(Buffer.from(`${settings.receipt.headerText}\n`, 'utf8'))
   chunks.push(
     Buffer.from([0x1b, 0x61, 0x00]), // Left
     Buffer.from(line('-')),

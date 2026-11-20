@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   Store,
   ShoppingCart,
@@ -10,12 +10,42 @@ import {
   Usb,
   RotateCcw,
   CheckCircle2,
-  FolderOpen
+  FolderOpen,
+  ImagePlus,
+  X
 } from 'lucide-react'
 import { useAppStore, useT } from '../store'
 import type { AppSettings } from '@shared/settings'
 import type { BackupRecord, RemovableDrive } from '../../../main/services/backup'
 import { fromCents, toCents } from '@shared/money'
+
+/** Resizes an uploaded store logo to a crisp offline data URL (max 320px, <= 400 KB) suitable for thermal receipts. */
+async function logoFileToDataUrl(file: File, maxDim = 320): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('INVALID_IMAGE_FILE')
+  const raw = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('INVALID_IMAGE_FILE'))
+    reader.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image()
+    el.onload = () => resolve(el)
+    el.onerror = () => reject(new Error('INVALID_IMAGE_FILE'))
+    el.src = raw
+  })
+  const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1))
+  const w = Math.max(1, Math.round(img.width * scale))
+  const h = Math.max(1, Math.round(img.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return raw
+  ctx.drawImage(img, 0, 0, w, h)
+  const mime = file.type === 'image/png' || file.type === 'image/webp' ? file.type : 'image/jpeg'
+  return canvas.toDataURL(mime, 0.88)
+}
 
 export function SettingsPage() {
   const { t, lang } = useT()
@@ -35,6 +65,22 @@ export function SettingsPage() {
   const [backups, setBackups] = useState<BackupRecord[]>([])
   const [usbDrives, setUsbDrives] = useState<RemovableDrive[]>([])
   const [dbInfo, setDbInfo] = useState<{ dbPath: string; backupDir: string; integrityOk: boolean } | null>(null)
+  const logoInputRef = useRef<HTMLInputElement>(null)
+  const [logoDragActive, setLogoDragActive] = useState(false)
+
+  const handleLogoFile = async (file?: File | null) => {
+    if (!file || !form) return
+    try {
+      const dataUrl = await logoFileToDataUrl(file)
+      if (dataUrl.length > 395000) {
+        notify('error', lang === 'ar' ? 'حجم الشعار كبير جداً' : 'Logo trop volumineux (max ~350 Ko).')
+        return
+      }
+      setForm({ ...form, store: { ...form.store, logoDataUrl: dataUrl } })
+    } catch {
+      notify('error', lang === 'ar' ? 'ملف صورة غير صالح' : 'Fichier image invalide (PNG, JPG ou WebP).')
+    }
+  }
 
   const loadAll = async () => {
     try {
@@ -193,6 +239,83 @@ export function SettingsPage() {
         <form onSubmit={handleSave} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs text-xs space-y-5">
           {tab === 'store' && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {/* Store Logo Upload */}
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block font-semibold">
+                  {lang === 'ar' ? 'شعار المتجر (يظهر في الفاتورة والواجهة)' : 'Logo du magasin (affiché sur le ticket client et la barre latérale)'}
+                </label>
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    setLogoDragActive(true)
+                  }}
+                  onDragLeave={() => setLogoDragActive(false)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    setLogoDragActive(false)
+                    handleLogoFile(e.dataTransfer.files?.[0])
+                  }}
+                  className={`flex flex-wrap items-center gap-4 rounded-xl border-2 border-dashed p-4 transition ${
+                    logoDragActive ? 'border-emerald-500 bg-emerald-50' : 'border-slate-300 bg-slate-50/70'
+                  }`}
+                >
+                  <div className="flex h-20 w-28 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2">
+                    {form.store.logoDataUrl ? (
+                      <img
+                        src={form.store.logoDataUrl}
+                        alt="Logo"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <Store className="h-8 w-8 text-slate-300" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="text-xs text-slate-600">
+                      {lang === 'ar'
+                        ? 'اسحب صورة الشعار هنا أو انقر لاختيار ملف (PNG / JPG / WebP).'
+                        : 'Glissez-déposez le logo ici ou cliquez pour choisir une image (PNG, JPG ou WebP).'}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        ref={logoInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          handleLogoFile(e.target.files?.[0])
+                          e.target.value = ''
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => logoInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white hover:bg-slate-800"
+                      >
+                        <ImagePlus className="h-3.5 w-3.5" />
+                        {form.store.logoDataUrl
+                          ? lang === 'ar'
+                            ? 'تغيير الشعار'
+                            : 'Changer le logo'
+                          : lang === 'ar'
+                            ? 'إضافة شعار'
+                            : 'Ajouter un logo'}
+                      </button>
+                      {form.store.logoDataUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, store: { ...form.store, logoDataUrl: '' } })}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-100"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          {lang === 'ar' ? 'حذف' : 'Supprimer'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="mb-1 block font-semibold">Nom du magasin *</label>
                 <input
@@ -204,9 +327,12 @@ export function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="mb-1 block font-semibold">{t.customers.phone}</label>
+                <label className="mb-1 block font-semibold">
+                  {lang === 'ar' ? 'رقم الهاتف الرسمي للمتجر' : 'Téléphone officiel du magasin'}
+                </label>
                 <input
                   type="text"
+                  placeholder="ex: +212 5 22 00 00 00"
                   value={form.store.phone}
                   onChange={(e) => setForm({ ...form, store: { ...form.store, phone: e.target.value } })}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -218,6 +344,15 @@ export function SettingsPage() {
                   type="text"
                   value={form.store.address}
                   onChange={(e) => setForm({ ...form, store: { ...form.store, address: e.target.value } })}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block font-semibold">Email (optionnel)</label>
+                <input
+                  type="email"
+                  value={form.store.email}
+                  onChange={(e) => setForm({ ...form, store: { ...form.store, email: e.target.value } })}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </div>
@@ -414,13 +549,80 @@ export function SettingsPage() {
                 </select>
               </div>
               <div>
-                <label className="mb-1 block font-semibold">Message de pied de ticket</label>
+                <label className="mb-1 block font-semibold">
+                  {lang === 'ar' ? 'رسالة الترحيب (أعلى الفاتورة)' : 'Message de bienvenue (en-tête du ticket)'}
+                </label>
+                <input
+                  type="text"
+                  placeholder="ex: Bienvenue ! مرحبا بكم"
+                  value={form.receipt.headerText}
+                  onChange={(e) => setForm({ ...form, receipt: { ...form.receipt, headerText: e.target.value } })}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="mb-1 block font-semibold">
+                  {lang === 'ar' ? 'رسالة الشكر (أسفل الفاتورة)' : 'Message de pied de ticket (remerciement)'}
+                </label>
                 <input
                   type="text"
                   value={form.receipt.footerText}
                   onChange={(e) => setForm({ ...form, receipt: { ...form.receipt, footerText: e.target.value } })}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
+              </div>
+              <div className="sm:col-span-2 flex flex-wrap gap-5">
+                <label className="flex items-center gap-2 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={form.receipt.showLogo}
+                    onChange={(e) => setForm({ ...form, receipt: { ...form.receipt, showLogo: e.target.checked } })}
+                    className="accent-emerald-600"
+                  />
+                  {lang === 'ar' ? 'طباعة شعار المتجر على الفاتورة' : 'Afficher le logo du magasin sur le ticket'}
+                </label>
+                <label className="flex items-center gap-2 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={form.receipt.bilingual}
+                    onChange={(e) => setForm({ ...form, receipt: { ...form.receipt, bilingual: e.target.checked } })}
+                    className="accent-emerald-600"
+                  />
+                  {lang === 'ar' ? 'فاتورة ثنائية اللغة (فرنسية / عربية)' : 'Ticket bilingue (Français / العربية)'}
+                </label>
+              </div>
+
+              {/* Live Receipt Header & Footer Preview */}
+              <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  {lang === 'ar' ? 'معاينة الفاتورة' : 'Aperçu du ticket client'}
+                </div>
+                <div className="mx-auto max-w-[260px] rounded-lg border border-slate-300 bg-white p-4 text-center text-[11px] text-slate-900 shadow-xs">
+                  {form.receipt.showLogo && form.store.logoDataUrl && (
+                    <img
+                      src={form.store.logoDataUrl}
+                      alt="Logo"
+                      className="mx-auto mb-1.5 max-h-12 max-w-[120px] object-contain"
+                    />
+                  )}
+                  <div className="text-sm font-extrabold">{form.store.name || 'Smart POS'}</div>
+                  {form.store.address && <div className="text-[10px] text-slate-600">{form.store.address}</div>}
+                  {form.store.phone && (
+                    <div className="text-[10px] text-slate-600">Tél / الهاتف: {form.store.phone}</div>
+                  )}
+                  {form.store.email && <div className="text-[10px] text-slate-600">{form.store.email}</div>}
+                  {form.store.ice && <div className="text-[10px] text-slate-600">ICE: {form.store.ice}</div>}
+                  {form.receipt.headerText && (
+                    <div className="mt-1 text-[11px] font-semibold text-slate-800">{form.receipt.headerText}</div>
+                  )}
+                  <div className="my-2 border-t border-dashed border-slate-400" />
+                  <div className="flex justify-between text-[10px] text-slate-500">
+                    <span>Article exemple × 1</span>
+                    <span className="font-bold text-slate-800">25,00 DH</span>
+                  </div>
+                  <div className="my-2 border-t border-dashed border-slate-400" />
+                  <div className="text-[10px] text-slate-600">{form.receipt.footerText}</div>
+                </div>
               </div>
             </div>
           )}
