@@ -7,7 +7,8 @@ Smart POS is an offline-first Windows Desktop retail Point of Sale & Commercial 
 - **Desktop Runtime**: Electron 45 (`main` / `preload` / `renderer` strictly separated)
 - **Frontend**: React 19 + TypeScript + Tailwind CSS v4 + Zustand + Recharts + Lucide Icons
 - **Typography**: Bundled offline fonts (`@fontsource-variable/inter` for French/Latin, `@fontsource/cairo` for Arabic RTL)
-- **Database**: SQLite 3.53 via `better-sqlite3` (`journal_mode = WAL`, `synchronous = FULL`, `foreign_keys = ON`)
+- **Database**: SQLite 3.53 via `better-sqlite3` (`journal_mode = WAL`, `synchronous = FULL`, `foreign_keys = ON`, `cache_size = -64000`, `temp_store = MEMORY`, `mmap_size = 256MB`, `wal_autocheckpoint = 1000`)
+- **Security & Reliability**: `scrypt` password hashing, strict backend IPC RBAC enforcement, append-only `audit_logs` protected by SQLite triggers, AES-256-GCM encrypted verified backups (`.spbak`) with hourly scheduling and atomic USB verification, checkout idempotency keys, and rotating structured logs (`%APPDATA%\smart-pos\logs\smartpos.log`) with automatic secret redaction.
 - **Validation & Precision**: `zod` schemas at IPC boundaries + `decimal.js` for decimal-safe centime and milli-unit calculations
 - **Barcodes & Printing**: `bwip-js` (EAN-13 & Code 128 PNG/HTML/PDF rendering) + ESC/POS raw TCP/Serial & Windows printer driver support
 - **Hardware Serial Communication**: `serialport` with modular protocol adapters (`Simulated`, `Generic ASCII`, `CAS`, `Mettler-Toledo SICS`)

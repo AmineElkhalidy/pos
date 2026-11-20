@@ -408,6 +408,50 @@ CREATE TABLE backup_history (
   created_at TEXT NOT NULL
 );
 `
+  },
+  {
+    version: 2,
+    name: 'performance_indexes_idempotency_audit_immutability',
+    sql: `
+-- Performance indexes for high-volume sales, returns, cash sessions, stock & Arabic search
+CREATE INDEX IF NOT EXISTS ix_sale_return_items_sale_item ON sale_return_items(sale_item_id);
+CREATE INDEX IF NOT EXISTS ix_sale_return_items_return ON sale_return_items(return_id);
+CREATE INDEX IF NOT EXISTS ix_sale_return_items_product ON sale_return_items(product_id);
+CREATE INDEX IF NOT EXISTS ix_purchase_return_items_item ON purchase_return_items(purchase_item_id);
+CREATE INDEX IF NOT EXISTS ix_purchase_return_items_return ON purchase_return_items(return_id);
+CREATE INDEX IF NOT EXISTS ix_sale_payments_method ON sale_payments(method_code, sale_id);
+CREATE INDEX IF NOT EXISTS ix_sale_returns_session ON sale_returns(session_id);
+CREATE INDEX IF NOT EXISTS ix_customer_payments_session ON customer_payments(session_id);
+CREATE INDEX IF NOT EXISTS ix_expenses_session ON expenses(session_id);
+CREATE INDEX IF NOT EXISTS ix_expenses_deleted_date ON expenses(deleted, expense_date);
+CREATE INDEX IF NOT EXISTS ix_expenses_category ON expenses(category_id);
+CREATE INDEX IF NOT EXISTS ix_purchase_payments_session ON purchase_payments(session_id);
+CREATE INDEX IF NOT EXISTS ix_sales_created_totals ON sales(created_at, total_cents, cost_cents);
+CREATE INDEX IF NOT EXISTS ix_sales_customer_created ON sales(customer_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_sales_user_created ON sales(user_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_sale_returns_created_totals ON sale_returns(created_at, total_cents, cost_cents);
+CREATE INDEX IF NOT EXISTS ix_products_stock_state ON products(archived, active, stock_milli);
+CREATE INDEX IF NOT EXISTS ix_products_expiry ON products(archived, active, track_expiry, expiry_date);
+CREATE INDEX IF NOT EXISTS ix_products_name_ar ON products(name_ar);
+CREATE INDEX IF NOT EXISTS ix_backup_history_status ON backup_history(status, verified, id);
+
+-- Idempotency key on sales to prevent duplicate checkout transactions on retries / double-clicks
+ALTER TABLE sales ADD COLUMN idempotency_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_idempotency ON sales(idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+-- Database-level immutability for audit_logs (append-only)
+CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_update
+BEFORE UPDATE ON audit_logs
+BEGIN
+  SELECT RAISE(ABORT, 'AUDIT_LOGS_IMMUTABLE');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_delete
+BEFORE DELETE ON audit_logs
+BEGIN
+  SELECT RAISE(ABORT, 'AUDIT_LOGS_IMMUTABLE');
+END;
+`
   }
 ]
 

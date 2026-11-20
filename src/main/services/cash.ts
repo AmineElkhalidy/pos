@@ -69,14 +69,19 @@ export function computeSession(db: DB, id: number): CashSessionSummary {
     | undefined
   if (!s) throw new AppError('NOT_FOUND')
   const one = (sql: string) => ((db.prepare(sql).get(id) as { v: number | null }).v ?? 0) as number
-  const cashSales = one(
-    `SELECT SUM(sp.amount_cents) AS v FROM sale_payments sp JOIN sales sa ON sa.id = sp.sale_id
-     JOIN payment_methods pm ON pm.code = sp.method_code WHERE sa.session_id = ? AND pm.is_cash = 1`
-  )
-  const nonCashSales = one(
-    `SELECT SUM(sp.amount_cents) AS v FROM sale_payments sp JOIN sales sa ON sa.id = sp.sale_id
-     JOIN payment_methods pm ON pm.code = sp.method_code WHERE sa.session_id = ? AND pm.is_cash = 0`
-  )
+  const payAgg = db
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN pm.is_cash = 1 THEN sp.amount_cents ELSE 0 END), 0) AS cashSales,
+        COALESCE(SUM(CASE WHEN pm.is_cash = 0 THEN sp.amount_cents ELSE 0 END), 0) AS nonCashSales
+       FROM sales sa
+       JOIN sale_payments sp ON sp.sale_id = sa.id
+       JOIN payment_methods pm ON pm.code = sp.method_code
+       WHERE sa.session_id = ?`
+    )
+    .get(id) as { cashSales: number; nonCashSales: number }
+  const cashSales = payAgg.cashSales
+  const nonCashSales = payAgg.nonCashSales
   const cashCustomer = one(
     `SELECT SUM(cp.amount_cents) AS v FROM customer_payments cp JOIN payment_methods pm ON pm.code = cp.method_code
      WHERE cp.session_id = ? AND pm.is_cash = 1`

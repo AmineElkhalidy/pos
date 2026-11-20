@@ -1,8 +1,51 @@
 import Papa from 'papaparse'
 import type { DB } from '../db/connection'
-import { dayRange, getSetting, localDateString } from './common'
-import { BALANCE_SQL, listCustomers } from './partners'
+import { dayRange, getDataRevision, getSetting, localDateString } from './common'
+import { listCustomers } from './partners'
 import { fromCents, fromMilli, lineAmount } from '@shared/money'
+
+export interface StockAlertsSummary {
+  lowStockCount: number
+  outOfStockCount: number
+  expiringCount: number
+}
+
+const alertsCache = new WeakMap<DB, { key: string; data: StockAlertsSummary }>()
+const dashboardCache = new WeakMap<DB, { key: string; data: DashboardData }>()
+
+export function getAlertCounts(db: DB): StockAlertsSummary {
+  const todayStr = localDateString()
+  const key = `${getDataRevision(db)}:${todayStr}`
+  const cached = alertsCache.get(db)
+  if (cached && cached.key === key) return cached.data
+
+  const prodStats = db
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN stock_milli > 0 AND stock_milli <= min_stock_milli THEN 1 ELSE 0 END), 0) AS low,
+        COALESCE(SUM(CASE WHEN stock_milli <= 0 THEN 1 ELSE 0 END), 0) AS outCount
+       FROM products WHERE archived = 0 AND active = 1`
+    )
+    .get() as { low: number; outCount: number }
+
+  const expiryDays = getSetting(db, 'stock').expiryAlertDays
+  const expiryLimit = new Date(Date.now() + expiryDays * 86400000).toISOString().slice(0, 10)
+  const expiringCount = (
+    db
+      .prepare(
+        'SELECT COUNT(*) AS c FROM products WHERE archived = 0 AND active = 1 AND track_expiry = 1 AND expiry_date IS NOT NULL AND expiry_date <= ?'
+      )
+      .get(expiryLimit) as { c: number }
+  ).c
+
+  const data: StockAlertsSummary = {
+    lowStockCount: prodStats.low,
+    outOfStockCount: prodStats.outCount,
+    expiringCount
+  }
+  alertsCache.set(db, { key, data })
+  return data
+}
 
 export interface DashboardData {
   todayRevenueCents: number
@@ -51,6 +94,10 @@ export interface DashboardData {
 
 export function getDashboardData(db: DB): DashboardData {
   const todayStr = localDateString()
+  const cacheKey = `${getDataRevision(db)}:${todayStr}`
+  const cached = dashboardCache.get(db)
+  if (cached && cached.key === cacheKey) return cached.data
+
   const { from: todayFrom, to: todayTo } = dayRange(todayStr, todayStr)
 
   const salesToday = db
@@ -73,7 +120,7 @@ export function getDashboardData(db: DB): DashboardData {
 
   const todayExpensesCents = (
     db
-      .prepare('SELECT COALESCE(SUM(amount_cents), 0) AS v FROM expenses WHERE expense_date = ? AND deleted = 0')
+      .prepare('SELECT COALESCE(SUM(amount_cents), 0) AS v FROM expenses WHERE deleted = 0 AND expense_date = ?')
       .get(todayStr) as { v: number }
   ).v
   const todayNetProfitCents = todayGrossProfitCents - todayExpensesCents
@@ -97,11 +144,22 @@ export function getDashboardData(db: DB): DashboardData {
       .get(expiryLimit) as { c: number }
   ).c
 
+  // Single-pass grouped customer debt aggregation (avoids 3x correlated subqueries per customer)
   const debtAgg = db
     .prepare(
-      `SELECT COUNT(*) AS cnt, COALESCE(SUM(b), 0) AS total FROM (
-        SELECT ${BALANCE_SQL} AS b FROM customers c WHERE c.active = 1
-      ) WHERE b > 0`
+      `WITH
+        sc AS (SELECT customer_id, SUM(credit_cents) AS v FROM sales WHERE customer_id IS NOT NULL AND credit_cents > 0 GROUP BY customer_id),
+        sr AS (SELECT s.customer_id, SUM(r.debt_reduction_cents) AS v FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.customer_id IS NOT NULL AND r.debt_reduction_cents > 0 GROUP BY s.customer_id),
+        cp AS (SELECT customer_id, SUM(amount_cents) AS v FROM customer_payments GROUP BY customer_id),
+        bal AS (
+          SELECT (COALESCE(sc.v, 0) - COALESCE(sr.v, 0) - COALESCE(cp.v, 0)) AS b
+          FROM customers c
+          LEFT JOIN sc ON sc.customer_id = c.id
+          LEFT JOIN sr ON sr.customer_id = c.id
+          LEFT JOIN cp ON cp.customer_id = c.id
+          WHERE c.active = 1
+        )
+       SELECT COUNT(*) AS cnt, COALESCE(SUM(b), 0) AS total FROM bal WHERE b > 0`
     )
     .get() as { cnt: number; total: number }
 
@@ -114,27 +172,33 @@ export function getDashboardData(db: DB): DashboardData {
     )
     .all() as DashboardData['recentSales']
 
-  // Best-selling products (last 30 days, net of returns)
+  // Best-selling products (last 30 days, net of returns) using indexed LEFT JOIN instead of 3x correlated subqueries
   const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString()
   const bestSellers = db
     .prepare(
-      `SELECT p.id AS productId, p.name_fr AS nameFr, p.name_ar AS nameAr, p.unit_code AS unitCode,
-        SUM(si.qty_milli - si.returned_milli) AS qtyMilli,
-        SUM(si.total_cents - COALESCE((SELECT SUM(sri.amount_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0)) AS revenueCents,
-        SUM(
-          (si.total_cents - COALESCE((SELECT SUM(sri.amount_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0))
-          - (si.cost_cents - COALESCE((SELECT SUM(sri.cost_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0))
-        ) AS profitCents
-       FROM sale_items si
-       JOIN sales s ON s.id = si.sale_id
+      `WITH ret_by_item AS (
+         SELECT sri.sale_item_id, SUM(sri.amount_cents) AS ret_amt, SUM(sri.cost_cents) AS ret_cost
+         FROM sale_return_items sri
+         JOIN sale_items si2 ON si2.id = sri.sale_item_id
+         JOIN sales s2 ON s2.id = si2.sale_id
+         WHERE s2.created_at >= ?
+         GROUP BY sri.sale_item_id
+       )
+       SELECT p.id AS productId, p.name_fr AS nameFr, p.name_ar AS nameAr, p.unit_code AS unitCode,
+         SUM(si.qty_milli - si.returned_milli) AS qtyMilli,
+         SUM(si.total_cents - COALESCE(r.ret_amt, 0)) AS revenueCents,
+         SUM((si.total_cents - COALESCE(r.ret_amt, 0)) - (si.cost_cents - COALESCE(r.ret_cost, 0))) AS profitCents
+       FROM sales s
+       JOIN sale_items si ON si.sale_id = s.id
        JOIN products p ON p.id = si.product_id
+       LEFT JOIN ret_by_item r ON r.sale_item_id = si.id
        WHERE s.created_at >= ?
        GROUP BY p.id
        HAVING qtyMilli > 0
        ORDER BY revenueCents DESC
        LIMIT 8`
     )
-    .all(thirtyAgo) as DashboardData['bestSellers']
+    .all(thirtyAgo, thirtyAgo) as DashboardData['bestSellers']
 
   const lowStockItems = db
     .prepare(
@@ -144,64 +208,87 @@ export function getDashboardData(db: DB): DashboardData {
     )
     .all() as DashboardData['lowStockItems']
 
-  // Charts: Daily (last 14 days), Weekly (last 12 weeks), Monthly (last 12 months)
+  // Charts: fetch daily aggregates ONCE for the last 12 months (2 covering-index queries instead of 76 loop queries!)
+  const now = new Date()
+  const twelveMonthsStart = new Date(now.getFullYear(), now.getMonth() - 11, 1)
+  const chartFromIso = twelveMonthsStart.toISOString()
+
+  const dailySalesRows = db
+    .prepare(
+      `SELECT date(created_at, 'localtime') AS d, COUNT(*) AS c, COALESCE(SUM(total_cents), 0) AS r, COALESCE(SUM(cost_cents), 0) AS cost
+       FROM sales WHERE created_at >= ? GROUP BY d`
+    )
+    .all(chartFromIso) as { d: string; c: number; r: number; cost: number }[]
+
+  const dailyRetRows = db
+    .prepare(
+      `SELECT date(created_at, 'localtime') AS d, COALESCE(SUM(total_cents), 0) AS r, COALESCE(SUM(cost_cents), 0) AS cost
+       FROM sale_returns WHERE created_at >= ? GROUP BY d`
+    )
+    .all(chartFromIso) as { d: string; r: number; cost: number }[]
+
+  const dayMap = new Map<string, { c: number; r: number; cost: number }>()
+  for (const row of dailySalesRows) {
+    dayMap.set(row.d, { c: row.c, r: row.r, cost: row.cost })
+  }
+  for (const row of dailyRetRows) {
+    const cur = dayMap.get(row.d) ?? { c: 0, r: 0, cost: 0 }
+    cur.r -= row.r
+    cur.cost -= row.cost
+    dayMap.set(row.d, cur)
+  }
+
   const chartDaily: DashboardData['chartDaily'] = []
   for (let i = 13; i >= 0; i--) {
-    const d = new Date()
+    const d = new Date(now)
     d.setDate(d.getDate() - i)
     const ds = localDateString(d)
-    const { from, to } = dayRange(ds, ds)
-    const s = db
-      .prepare('SELECT COUNT(*) AS c, COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sales WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { c: number; r: number; cost: number }
-    const ret = db
-      .prepare('SELECT COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sale_returns WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { r: number; cost: number }
-    const rev = s.r - ret.r
-    const cogs = s.cost - ret.cost
-    chartDaily.push({ label: ds.slice(5), revenueCents: rev, profitCents: rev - cogs, count: s.c })
+    const bucket = dayMap.get(ds) ?? { c: 0, r: 0, cost: 0 }
+    chartDaily.push({ label: ds.slice(5), revenueCents: bucket.r, profitCents: bucket.r - bucket.cost, count: bucket.c })
   }
 
   const chartWeekly: DashboardData['chartWeekly'] = []
   for (let w = 11; w >= 0; w--) {
-    const end = new Date()
+    const end = new Date(now)
     end.setDate(end.getDate() - w * 7)
     const start = new Date(end)
     start.setDate(start.getDate() - 6)
     const startStr = localDateString(start)
-    const endStr = localDateString(end)
-    const { from, to } = dayRange(startStr, endStr)
-    const s = db
-      .prepare('SELECT COUNT(*) AS c, COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sales WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { c: number; r: number; cost: number }
-    const ret = db
-      .prepare('SELECT COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sale_returns WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { r: number; cost: number }
-    const rev = s.r - ret.r
-    const cogs = s.cost - ret.cost
-    chartWeekly.push({ label: startStr.slice(5), revenueCents: rev, profitCents: rev - cogs, count: s.c })
+    let rev = 0
+    let cost = 0
+    let count = 0
+    for (let dOff = 0; dOff < 7; dOff++) {
+      const cur = new Date(start)
+      cur.setDate(cur.getDate() + dOff)
+      const b = dayMap.get(localDateString(cur))
+      if (b) {
+        rev += b.r
+        cost += b.cost
+        count += b.c
+      }
+    }
+    chartWeekly.push({ label: startStr.slice(5), revenueCents: rev, profitCents: rev - cost, count })
+  }
+
+  const monthMap = new Map<string, { c: number; r: number; cost: number }>()
+  for (const [ds, b] of dayMap) {
+    const mKey = ds.slice(0, 7)
+    const cur = monthMap.get(mKey) ?? { c: 0, r: 0, cost: 0 }
+    cur.c += b.c
+    cur.r += b.r
+    cur.cost += b.cost
+    monthMap.set(mKey, cur)
   }
 
   const chartMonthly: DashboardData['chartMonthly'] = []
-  const now = new Date()
   for (let m = 11; m >= 0; m--) {
     const d = new Date(now.getFullYear(), now.getMonth() - m, 1)
-    const next = new Date(d.getFullYear(), d.getMonth() + 1, 1)
     const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    const from = d.toISOString()
-    const to = next.toISOString()
-    const s = db
-      .prepare('SELECT COUNT(*) AS c, COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sales WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { c: number; r: number; cost: number }
-    const ret = db
-      .prepare('SELECT COALESCE(SUM(total_cents),0) AS r, COALESCE(SUM(cost_cents),0) AS cost FROM sale_returns WHERE created_at >= ? AND created_at < ?')
-      .get(from, to) as { r: number; cost: number }
-    const rev = s.r - ret.r
-    const cogs = s.cost - ret.cost
-    chartMonthly.push({ label, revenueCents: rev, profitCents: rev - cogs, count: s.c })
+    const b = monthMap.get(label) ?? { c: 0, r: 0, cost: 0 }
+    chartMonthly.push({ label, revenueCents: b.r, profitCents: b.r - b.cost, count: b.c })
   }
 
-  return {
+  const result: DashboardData = {
     todayRevenueCents,
     todaySalesCount: salesToday.count,
     todayCogsCents,
@@ -221,6 +308,8 @@ export function getDashboardData(db: DB): DashboardData {
     chartWeekly,
     chartMonthly
   }
+  dashboardCache.set(db, { key: cacheKey, data: result })
+  return result
 }
 
 export interface ReportFilter {
@@ -279,23 +368,32 @@ export function getComprehensiveReport(db: DB, filter: ReportFilter) {
 
   const netProfitCents = grossProfitCents - expSummary.totalCents
 
-  // Sales by Product (using historical unit_cost_cents/cost_cents stored on sale_items)
+  // Sales by Product (using historical unit_cost_cents/cost_cents stored on sale_items + indexed return CTE)
   const byProduct = db
     .prepare(
-      `SELECT p.id AS productId, p.sku, p.name_fr AS nameFr, p.name_ar AS nameAr, p.unit_code AS unitCode,
-        c.name_fr AS categoryName,
-        SUM(si.qty_milli - si.returned_milli) AS qtyMilli,
-        SUM(si.total_cents - COALESCE((SELECT SUM(sri.amount_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0)) AS revenueCents,
-        SUM(si.cost_cents - COALESCE((SELECT SUM(sri.cost_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0)) AS costCents
-       FROM sale_items si
-       JOIN sales s ON s.id = si.sale_id
+      `WITH ret_by_item AS (
+         SELECT sri.sale_item_id, SUM(sri.amount_cents) AS ret_amt, SUM(sri.cost_cents) AS ret_cost
+         FROM sale_return_items sri
+         JOIN sale_items si2 ON si2.id = sri.sale_item_id
+         JOIN sales s2 ON s2.id = si2.sale_id
+         WHERE s2.created_at >= ? AND s2.created_at < ? ${filter.userId ? 'AND s2.user_id = ?' : ''}
+         GROUP BY sri.sale_item_id
+       )
+       SELECT p.id AS productId, p.sku, p.name_fr AS nameFr, p.name_ar AS nameAr, p.unit_code AS unitCode,
+         c.name_fr AS categoryName,
+         SUM(si.qty_milli - si.returned_milli) AS qtyMilli,
+         SUM(si.total_cents - COALESCE(r.ret_amt, 0)) AS revenueCents,
+         SUM(si.cost_cents - COALESCE(r.ret_cost, 0)) AS costCents
+       FROM sales s
+       JOIN sale_items si ON si.sale_id = s.id
        JOIN products p ON p.id = si.product_id
        LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN ret_by_item r ON r.sale_item_id = si.id
        WHERE s.created_at >= ? AND s.created_at < ? ${userCond}
        GROUP BY p.id
        ORDER BY revenueCents DESC`
     )
-    .all(...userParams)
+    .all(...userParams, ...userParams)
     .map((r) => {
       const row = r as {
         productId: number
@@ -311,22 +409,31 @@ export function getComprehensiveReport(db: DB, filter: ReportFilter) {
       return { ...row, grossProfitCents: row.revenueCents - row.costCents }
     })
 
-  // Sales by Category
+  // Sales by Category (using indexed return CTE)
   const byCategory = db
     .prepare(
-      `SELECT COALESCE(c.id, 0) AS categoryId, COALESCE(c.name_fr, 'Sans catégorie') AS nameFr, COALESCE(c.name_ar, 'بدون فئة') AS nameAr,
-        COUNT(DISTINCT s.id) AS salesCount,
-        SUM(si.total_cents - COALESCE((SELECT SUM(sri.amount_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0)) AS revenueCents,
-        SUM(si.cost_cents - COALESCE((SELECT SUM(sri.cost_cents) FROM sale_return_items sri WHERE sri.sale_item_id = si.id), 0)) AS costCents
-       FROM sale_items si
-       JOIN sales s ON s.id = si.sale_id
+      `WITH ret_by_item AS (
+         SELECT sri.sale_item_id, SUM(sri.amount_cents) AS ret_amt, SUM(sri.cost_cents) AS ret_cost
+         FROM sale_return_items sri
+         JOIN sale_items si2 ON si2.id = sri.sale_item_id
+         JOIN sales s2 ON s2.id = si2.sale_id
+         WHERE s2.created_at >= ? AND s2.created_at < ? ${filter.userId ? 'AND s2.user_id = ?' : ''}
+         GROUP BY sri.sale_item_id
+       )
+       SELECT COALESCE(c.id, 0) AS categoryId, COALESCE(c.name_fr, 'Sans catégorie') AS nameFr, COALESCE(c.name_ar, 'بدون فئة') AS nameAr,
+         COUNT(DISTINCT s.id) AS salesCount,
+         SUM(si.total_cents - COALESCE(r.ret_amt, 0)) AS revenueCents,
+         SUM(si.cost_cents - COALESCE(r.ret_cost, 0)) AS costCents
+       FROM sales s
+       JOIN sale_items si ON si.sale_id = s.id
        JOIN products p ON p.id = si.product_id
        LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN ret_by_item r ON r.sale_item_id = si.id
        WHERE s.created_at >= ? AND s.created_at < ? ${userCond}
        GROUP BY COALESCE(c.id, 0)
        ORDER BY revenueCents DESC`
     )
-    .all(...userParams)
+    .all(...userParams, ...userParams)
     .map((r) => {
       const row = r as { categoryId: number; nameFr: string; nameAr: string; salesCount: number; revenueCents: number; costCents: number }
       return { ...row, grossProfitCents: row.revenueCents - row.costCents }
@@ -357,14 +464,14 @@ export function getComprehensiveReport(db: DB, filter: ReportFilter) {
     grossProfitCents: number
   }[]
 
-  // Payment methods breakdown
+  // Payment methods breakdown (driven by sales date index, not full scan of sale_payments)
   const byPaymentMethod = db
     .prepare(
       `SELECT pm.code, pm.name_fr AS nameFr, pm.name_ar AS nameAr, COALESCE(SUM(sp.amount_cents), 0) AS amountCents, COUNT(sp.id) AS count
-       FROM payment_methods pm
-       LEFT JOIN sale_payments sp ON sp.method_code = pm.code
-       LEFT JOIN sales s ON s.id = sp.sale_id AND s.created_at >= ? AND s.created_at < ? ${userCond}
-       WHERE s.id IS NOT NULL
+       FROM sales s
+       JOIN sale_payments sp ON sp.sale_id = s.id
+       JOIN payment_methods pm ON pm.code = sp.method_code
+       WHERE s.created_at >= ? AND s.created_at < ? ${userCond}
        GROUP BY pm.code
        ORDER BY amountCents DESC`
     )

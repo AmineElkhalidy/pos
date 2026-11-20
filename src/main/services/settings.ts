@@ -1,5 +1,5 @@
 import { settingsSchema, type AppSettings, type SettingsSection } from '@shared/settings'
-import { AppError, audit, getSettings, hasPerm, type Ctx } from './common'
+import { AppError, audit, getSettings, hasPerm, invalidateSettingsCache, type Ctx } from './common'
 
 export function updateSettings(ctx: Ctx, partial: Partial<AppSettings>): AppSettings {
   if (!hasPerm(ctx.user, 'settings.manage')) throw new AppError('FORBIDDEN', { permission: 'settings.manage' })
@@ -23,6 +23,7 @@ export function updateSettings(ctx: Ctx, partial: Partial<AppSettings>): AppSett
     }
     audit(db, ctx.user.id, 'SETTINGS_UPDATED', 'settings', null, Object.keys(partial))
   })()
+  invalidateSettingsCache(db)
   return validated
 }
 

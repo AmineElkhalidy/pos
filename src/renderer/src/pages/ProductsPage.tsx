@@ -63,6 +63,8 @@ export function ProductsPage() {
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState<number | null>(null)
   const [status, setStatus] = useState<'active' | 'inactive' | 'archived' | 'all'>('active')
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 50
 
   const [editing, setEditing] = useState<ProductRow | null>(null)
   const [showModal, setShowModal] = useState(false)
@@ -88,10 +90,10 @@ export function ProductsPage() {
   const [barcodes, setBarcodes] = useState<string[]>([])
   const [newBarcodeInput, setNewBarcodeInput] = useState('')
 
-  const load = async () => {
+  const load = async (targetPage = page) => {
     try {
       const [res, cats] = await Promise.all([
-        window.api.listProducts({ search, categoryId, status, limit: 500, withImages: true }),
+        window.api.listProducts({ search, categoryId, status, limit: PAGE_SIZE, offset: targetPage * PAGE_SIZE, withImages: true }),
         window.api.listCategories()
       ])
       setItems(res.items)
@@ -103,8 +105,15 @@ export function ProductsPage() {
   }
 
   useEffect(() => {
-    load()
+    setPage(0)
   }, [search, categoryId, status])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      load(page)
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [search, categoryId, status, page])
 
   const openNew = () => {
     clearError()
@@ -441,6 +450,31 @@ export function ProductsPage() {
             )}
           </tbody>
         </table>
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-2.5 text-xs">
+            <span className="text-slate-600">
+              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} / {total}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+              >
+                ←
+              </button>
+              <button
+                type="button"
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+              >
+                →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Product Create / Edit Modal */}

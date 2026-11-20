@@ -29,6 +29,7 @@ const api: SmartPosApi = {
   setLanguage: (lang) => invoke('auth:setLanguage', lang),
 
   getDashboard: () => invoke('dashboard:get'),
+  getAlertCounts: () => invoke('dashboard:alerts'),
 
   listCategories: () => invoke('categories:list'),
   saveCategory: (id, data) => invoke('categories:save', id, data),

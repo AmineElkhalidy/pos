@@ -187,12 +187,18 @@ export function listProducts(db: DB, opts: ProductListOptions = {}) {
     const t = likeTerm(q)
     where.push(
       `(p.name_fr LIKE ? ESCAPE '\\' OR p.name_ar LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\'
+        OR c.name_fr LIKE ? ESCAPE '\\' OR c.name_ar LIKE ? ESCAPE '\\'
         OR EXISTS (SELECT 1 FROM product_barcodes b WHERE b.product_id = p.id AND b.code LIKE ? ESCAPE '\\'))`
     )
-    params.push(t, t, t, t)
+    params.push(t, t, t, t, t, t)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM products p ${whereSql}`).get(...params) as { c: number }).c
+  const needsCatJoin = Boolean(opts.search && opts.search.trim())
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) AS c FROM products p ${needsCatJoin ? 'LEFT JOIN categories c ON c.id = p.category_id' : ''} ${whereSql}`)
+      .get(...params) as { c: number }
+  ).c
   const limit = Math.min(opts.limit ?? 200, 5000)
   const rows = db
     .prepare(`${PRODUCT_SELECT} ${whereSql} ORDER BY p.name_fr COLLATE NOCASE LIMIT ? OFFSET ?`)

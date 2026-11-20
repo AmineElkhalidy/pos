@@ -30,7 +30,8 @@ export const saleInputSchema = z.object({
   cartDiscount: discountSchema,
   customerId: z.number().int().positive().nullable().optional(),
   payments: z.array(z.object({ method: z.string().min(1), amount: decimalInput })).default([]),
-  notes: z.string().max(500).optional().nullable()
+  notes: z.string().max(500).optional().nullable(),
+  idempotencyKey: z.string().trim().min(1).max(100).optional().nullable()
 })
 
 export type SaleInput = z.input<typeof saleInputSchema>
@@ -55,6 +56,14 @@ export function createSale(ctx: Ctx, raw: unknown) {
   const isAdmin = ctx.user.role === 'ADMIN'
 
   const run = db.transaction(() => {
+    // ---- idempotency check (prevents duplicate sales on double-click / retry)
+    if (input.idempotencyKey) {
+      const existing = db
+        .prepare('SELECT id FROM sales WHERE idempotency_key = ?')
+        .get(input.idempotencyKey) as { id: number } | undefined
+      if (existing) return existing.id
+    }
+
     // ---- cash session
     const session = getOpenSession(db, ctx.user.id)
     if (settings.sales.requireCashSession && !session) throw new AppError('NO_OPEN_SESSION')
@@ -167,8 +176,8 @@ export function createSale(ctx: Ctx, raw: unknown) {
     const saleRes = db
       .prepare(
         `INSERT INTO sales (invoice_no, created_at, user_id, customer_id, session_id, subtotal_cents, lines_discount_cents,
-          cart_discount_cents, total_cents, paid_cents, credit_cents, tendered_cents, change_cents, cost_cents, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?)`
+          cart_discount_cents, total_cents, paid_cents, credit_cents, tendered_cents, change_cents, cost_cents, status, notes, idempotency_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)`
       )
       .run(
         invoiceNo,
@@ -185,7 +194,8 @@ export function createSale(ctx: Ctx, raw: unknown) {
         alloc.tenderedCents,
         alloc.changeCents,
         costTotal,
-        input.notes ?? null
+        input.notes ?? null,
+        input.idempotencyKey ?? null
       )
     const saleId = Number(saleRes.lastInsertRowid)
     const insItem = db.prepare(

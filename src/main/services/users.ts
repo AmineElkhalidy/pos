@@ -43,21 +43,30 @@ function toSessionUser(db: DB, u: UserRow): SessionUser {
 const USER_SELECT = `SELECT u.*, r.code AS role_code FROM users u JOIN roles r ON r.id = u.role_id`
 
 /** In-memory brute-force protection: lock a username for 60s after 5 failures. */
-const failures = new Map<string, { count: number; until: number }>()
+const failures = new Map<string, { count: number; until: number; lastAttempt: number }>()
+
+function pruneFailures(now: number): void {
+  if (failures.size < 100) return
+  for (const [k, v] of failures) {
+    if (v.until <= now && now - v.lastAttempt > 10 * 60_000) failures.delete(k)
+  }
+}
 
 export function login(db: DB, username: string, password: string): SessionUser {
   const trimmed = username.trim()
   if (!trimmed) throw new AppError('USERNAME_REQUIRED')
   if (!password) throw new AppError('PASSWORD_REQUIRED')
+  const now = Date.now()
+  pruneFailures(now)
   const key = trimmed.toLowerCase()
   const f = failures.get(key)
-  if (f && f.until > Date.now()) {
-    throw new AppError('LOGIN_LOCKED', { seconds: Math.ceil((f.until - Date.now()) / 1000) })
+  if (f && f.until > now) {
+    throw new AppError('LOGIN_LOCKED', { seconds: Math.ceil((f.until - now) / 1000) })
   }
   const u = db.prepare(`${USER_SELECT} WHERE u.username = ? COLLATE NOCASE`).get(trimmed) as UserRow | undefined
   if (!u) {
     const count = (f?.count ?? 0) + 1
-    failures.set(key, { count, until: count >= 5 ? Date.now() + 60_000 : 0 })
+    failures.set(key, { count, until: count >= 5 ? now + 60_000 : 0, lastAttempt: now })
     audit(db, null, 'LOGIN_FAILED', 'user', null, { username: trimmed, reason: 'USER_NOT_FOUND' })
     throw new AppError('USER_NOT_FOUND', { username: trimmed })
   }
@@ -67,7 +76,7 @@ export function login(db: DB, username: string, password: string): SessionUser {
   }
   if (!verifyPassword(password, u.password_hash)) {
     const count = (f?.count ?? 0) + 1
-    failures.set(key, { count, until: count >= 5 ? Date.now() + 60_000 : 0 })
+    failures.set(key, { count, until: count >= 5 ? now + 60_000 : 0, lastAttempt: now })
     audit(db, u.id, 'LOGIN_FAILED', 'user', u.id, { username: trimmed, reason: 'WRONG_PASSWORD' })
     throw new AppError('WRONG_PASSWORD', { remaining: Math.max(0, 5 - count) })
   }
@@ -188,13 +197,15 @@ export function getRolePermissions(db: DB) {
 export function setCashierPermissions(ctx: Ctx, perms: string[]): void {
   const valid = perms.filter(isPermission)
   const forbiddenForCashier: Permission[] = ['users.manage', 'settings.manage', 'backup.manage']
+  const allowed = valid.filter((p) => !forbiddenForCashier.includes(p))
   const db = ctx.db
   db.transaction(() => {
     const rid = roleId(db, 'CASHIER')
+    const previous = rolePermissions(db, 'CASHIER')
     db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(rid)
     const ins = db.prepare('INSERT INTO role_permissions (role_id, permission_code) VALUES (?, ?)')
-    for (const p of valid) if (!forbiddenForCashier.includes(p)) ins.run(rid, p)
-    audit(db, ctx.user.id, 'ROLE_PERMISSIONS_UPDATED', 'role', rid, { permissions: valid })
+    for (const p of allowed) ins.run(rid, p)
+    audit(db, ctx.user.id, 'ROLE_PERMISSIONS_UPDATED', 'role', rid, { from: previous, to: allowed })
   })()
 }
 

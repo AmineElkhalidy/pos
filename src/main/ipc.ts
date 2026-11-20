@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { integrityCheck, type DB } from './db/connection'
-import { AppError, audit, getSettings, requirePerm, type Ctx, type SessionUser } from './services/common'
+import { AppError, audit, getSettings, hasPerm, invalidateSettingsCache, requirePerm, type Ctx, type SessionUser } from './services/common'
+import { logger } from './services/logger'
 import * as usersSvc from './services/users'
 import * as productsSvc from './services/products'
 import * as stockSvc from './services/stock'
@@ -53,7 +54,8 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
         if (/^[A-Z0-9_]+$/.test(msg)) {
           return { ok: false, code: msg, params: {}, message: msg }
         }
-        return { ok: false, code: 'INTERNAL_ERROR', params: { detail: msg }, message: msg }
+        logger.error('ipc', `Unhandled error on channel ${channel}`, e)
+        return { ok: false, code: 'INTERNAL_ERROR', params: {}, message: 'INTERNAL_ERROR' }
       }
     })
   }
@@ -102,6 +104,7 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
       'general',
       JSON.stringify({ ...s.general, language: lang })
     )
+    invalidateSettingsCache(db)
   })
 
   // ---------------- Dashboard ----------------
@@ -109,6 +112,10 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     const ctx = getCtx()
     requirePerm(ctx.user, 'dashboard.view')
     return reportsSvc.getDashboardData(ctx.db)
+  })
+  handle('dashboard:alerts', () => {
+    const ctx = getCtx()
+    return reportsSvc.getAlertCounts(ctx.db)
   })
 
   // ---------------- Categories ----------------
@@ -130,14 +137,23 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
   // ---------------- Products & Barcodes ----------------
   handle('products:list', (opts?: productsSvc.ProductListOptions) => {
     const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'products.view') && !hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'stock.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'products.view' })
+    }
     return productsSvc.listProducts(ctx.db, opts)
   })
   handle('products:get', (id: number) => {
     const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'products.view') && !hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'stock.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'products.view' })
+    }
     return productsSvc.getProduct(ctx.db, id)
   })
   handle('products:lookupByCode', (code: string) => {
     const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'products.view') && !hasPerm(ctx.user, 'pos.sell')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.sell' })
+    }
     return productsSvc.lookupByCode(ctx.db, code)
   })
   handle('products:save', (id: number | null, data: unknown) => {
@@ -260,7 +276,12 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
   })
   handle('cash:list', (opts?: { userId?: number; status?: 'open' | 'closed'; limit?: number }) => {
     const ctx = getCtx()
-    return cashSvc.listSessions(ctx.db, opts ?? {})
+    if (!hasPerm(ctx.user, 'cash.open_close') && !hasPerm(ctx.user, 'cash.close_any') && !hasPerm(ctx.user, 'reports.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'cash.open_close' })
+    }
+    const canSeeAll = ctx.user.role === 'ADMIN' || hasPerm(ctx.user, 'cash.close_any') || hasPerm(ctx.user, 'reports.view')
+    const safeOpts = canSeeAll ? (opts ?? {}) : { ...(opts ?? {}), userId: ctx.user.id }
+    return cashSvc.listSessions(ctx.db, safeOpts)
   })
   handle('cash:listPaymentMethods', (includeInactive?: boolean) => {
     const ctx = getCtx()
@@ -274,10 +295,28 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
 
   // ---------------- Sales & Returns ----------------
   handle('sales:create', (data: unknown) => salesSvc.createSale(getCtx(), data))
-  handle('sales:get', (id: number) => salesSvc.getSale(getCtx().db, id))
-  handle('sales:list', (opts?: Parameters<typeof salesSvc.listSales>[1]) => salesSvc.listSales(getCtx().db, opts ?? {}))
+  handle('sales:get', (id: number) => {
+    const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'reports.view') && !hasPerm(ctx.user, 'credits.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.sell' })
+    }
+    return salesSvc.getSale(ctx.db, id)
+  })
+  handle('sales:list', (opts?: Parameters<typeof salesSvc.listSales>[1]) => {
+    const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'reports.view') && !hasPerm(ctx.user, 'credits.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.sell' })
+    }
+    return salesSvc.listSales(ctx.db, opts ?? {})
+  })
   handle('sales:createReturn', (data: unknown) => salesSvc.createSaleReturn(getCtx(), data))
-  handle('sales:listReturns', (opts?: Parameters<typeof salesSvc.listReturns>[1]) => salesSvc.listReturns(getCtx().db, opts ?? {}))
+  handle('sales:listReturns', (opts?: Parameters<typeof salesSvc.listReturns>[1]) => {
+    const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'pos.return') && !hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'reports.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.return' })
+    }
+    return salesSvc.listReturns(ctx.db, opts ?? {})
+  })
 
   // ---------------- Customers & Credits ----------------
   handle('customers:list', (opts?: Parameters<typeof partnersSvc.listCustomers>[1]) => {
@@ -315,6 +354,9 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
   // ---------------- Suppliers & Purchases ----------------
   handle('suppliers:list', (opts?: Parameters<typeof partnersSvc.listSuppliers>[1]) => {
     const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'suppliers.manage') && !hasPerm(ctx.user, 'purchases.manage')) {
+      throw new AppError('FORBIDDEN', { permission: 'suppliers.manage' })
+    }
     return partnersSvc.listSuppliers(ctx.db, opts)
   })
   handle('suppliers:save', (id: number | null, data: unknown) => {
@@ -333,10 +375,16 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     purchasesSvc.addPurchasePayment(getCtx(), data)
   )
   handle('purchases:createReturn', (data: unknown) => purchasesSvc.createPurchaseReturn(getCtx(), data))
-  handle('purchases:get', (id: number) => purchasesSvc.getPurchase(getCtx().db, id))
-  handle('purchases:list', (opts?: Parameters<typeof purchasesSvc.listPurchases>[1]) =>
-    purchasesSvc.listPurchases(getCtx().db, opts)
-  )
+  handle('purchases:get', (id: number) => {
+    const ctx = getCtx()
+    requirePerm(ctx.user, 'purchases.manage')
+    return purchasesSvc.getPurchase(ctx.db, id)
+  })
+  handle('purchases:list', (opts?: Parameters<typeof purchasesSvc.listPurchases>[1]) => {
+    const ctx = getCtx()
+    requirePerm(ctx.user, 'purchases.manage')
+    return purchasesSvc.listPurchases(ctx.db, opts)
+  })
 
   // ---------------- Expenses ----------------
   handle('expenses:listCategories', () => expensesSvc.listExpenseCategories(getCtx().db))
@@ -421,11 +469,18 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
 
   // ---------------- Printing & Receipts ----------------
   handle('print:listPrinters', () => printingSvc.listSystemPrinters())
-  handle('print:saleReceiptHtml', (saleId: number, widthMm?: 58 | 80) =>
-    printingSvc.buildSaleReceiptHtml(getCtx().db, saleId, widthMm)
-  )
+  handle('print:saleReceiptHtml', (saleId: number, widthMm?: 58 | 80) => {
+    const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'pos.reprint') && !hasPerm(ctx.user, 'reports.view')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.reprint' })
+    }
+    return printingSvc.buildSaleReceiptHtml(ctx.db, saleId, widthMm)
+  })
   handle('print:saleReceipt', async (saleId: number, action?: 'print' | 'pdf') => {
     const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'pos.sell') && !hasPerm(ctx.user, 'pos.reprint')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.reprint' })
+    }
     const settings = getSettings(ctx.db)
     const html = printingSvc.buildSaleReceiptHtml(ctx.db, saleId)
     const sale = salesSvc.getSale(ctx.db, saleId)
@@ -572,7 +627,8 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     return backupSvc.detectRemovableDrives()
   })
   handle('backup:chooseFolder', async () => {
-    getCtx()
+    const ctx = getCtx()
+    requirePerm(ctx.user, 'backup.manage')
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: 'Choisir le dossier de sauvegarde',
       properties: ['openDirectory', 'createDirectory']
@@ -580,11 +636,12 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     return canceled || !filePaths.length ? null : filePaths[0]
   })
   handle('backup:chooseFile', async () => {
-    getCtx()
+    const ctx = getCtx()
+    requirePerm(ctx.user, 'backup.manage')
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: 'Choisir un fichier de sauvegarde SQLite',
+      title: 'Choisir un fichier de sauvegarde Smart POS',
       properties: ['openFile'],
-      filters: [{ name: 'Sauvegarde Smart POS (.sqlite, .db)', extensions: ['sqlite', 'db'] }]
+      filters: [{ name: 'Sauvegarde Smart POS (.spbak, .sqlite, .db)', extensions: ['spbak', 'sqlite', 'db'] }]
     })
     return canceled || !filePaths.length ? null : filePaths[0]
   })
@@ -625,6 +682,7 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
   })
   handle('backup:dbInfo', () => {
     const ctx = getCtx()
+    requirePerm(ctx.user, 'backup.manage')
     const ic = integrityCheck(ctx.db)
     const cfg = getSettings(ctx.db).backup
     return {

@@ -3,7 +3,7 @@ import type { ProductRow, ProductListOptions, ImportResult } from '../main/servi
 import type { CustomerRow, StatementEntry } from '../main/services/partners'
 import type { CashSessionSummary } from '../main/services/cash'
 import type { SaleDetail } from '../main/services/sales'
-import type { DashboardData, ReportFilter } from '../main/services/reports'
+import type { DashboardData, ReportFilter, StockAlertsSummary } from '../main/services/reports'
 import type { BackupRecord, RemovableDrive } from '../main/services/backup'
 import type { ScaleReading, ScaleStatus } from '../main/services/scale'
 import type { LabelSpec } from '../main/services/printing'
@@ -34,6 +34,7 @@ export interface SmartPosApi {
 
   // Dashboard
   getDashboard(): Promise<DashboardData>
+  getAlertCounts(): Promise<StockAlertsSummary>
 
   // Categories
   listCategories(): Promise<{ id: number; nameFr: string; nameAr: string | null; color: string | null; active: boolean; productCount: number }[]>

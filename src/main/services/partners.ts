@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { DB } from '../db/connection'
 import { AppError, audit, getSetting, likeTerm, nowIso, type Ctx } from './common'
+import { toCents } from '@shared/money'
 
 // ======================= Customers =======================
 
@@ -61,9 +62,16 @@ export function getCustomerBalance(db: DB, customerId: number): number {
 }
 
 export function getCustomer(db: DB, id: number): CustomerRow {
-  const r = listCustomers(db, { includeInactive: true }).find((c) => c.id === id)
-  if (!r) throw new AppError('CUSTOMER_NOT_FOUND')
-  return r
+  const row = db
+    .prepare(
+      `SELECT c.id, c.name, c.phone, c.address, c.notes, c.credit_limit_cents AS creditLimitCents, c.active,
+        ${BALANCE_SQL} AS balanceCents,
+        (SELECT MAX(created_at) FROM sales s WHERE s.customer_id = c.id) AS lastSaleAt, c.created_at AS createdAt
+       FROM customers c WHERE c.id = ?`
+    )
+    .get(id) as (Omit<CustomerRow, 'active'> & { active: number }) | undefined
+  if (!row) throw new AppError('CUSTOMER_NOT_FOUND')
+  return { ...row, active: !!row.active }
 }
 
 export function saveCustomer(ctx: Ctx, id: number | null, raw: unknown) {
@@ -73,12 +81,19 @@ export function saveCustomer(ctx: Ctx, id: number | null, raw: unknown) {
   const limit =
     input.creditLimit === null || input.creditLimit === undefined || input.creditLimit === ''
       ? null
-      : Math.round(Number(String(input.creditLimit).replace(',', '.')) * 100)
-  if (limit !== null && (isNaN(limit) || limit < 0)) throw new AppError('INVALID_AMOUNT')
+      : toCents(input.creditLimit)
+  if (limit !== null && limit < 0) throw new AppError('INVALID_AMOUNT')
+  let prevLimit: number | null = null
   // Only administrators may change credit limits.
-  if (id !== null && ctx.user.role !== 'ADMIN') {
-    const old = db.prepare('SELECT credit_limit_cents FROM customers WHERE id = ?').get(id) as { credit_limit_cents: number | null }
-    if (old && old.credit_limit_cents !== limit) throw new AppError('FORBIDDEN', { permission: 'credit_limit' })
+  if (id !== null) {
+    const old = db.prepare('SELECT credit_limit_cents FROM customers WHERE id = ?').get(id) as
+      | { credit_limit_cents: number | null }
+      | undefined
+    if (!old) throw new AppError('CUSTOMER_NOT_FOUND')
+    prevLimit = old.credit_limit_cents
+    if (ctx.user.role !== 'ADMIN' && old.credit_limit_cents !== limit) {
+      throw new AppError('FORBIDDEN', { permission: 'credit_limit' })
+    }
   }
   if (id === null) {
     const finalLimit = ctx.user.role === 'ADMIN' ? limit : getSetting(db, 'sales').defaultCreditLimitCents
@@ -87,13 +102,17 @@ export function saveCustomer(ctx: Ctx, id: number | null, raw: unknown) {
         'INSERT INTO customers (name, phone, address, notes, credit_limit_cents, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(input.name, input.phone || null, input.address || null, input.notes || null, finalLimit, input.active ? 1 : 0, now, now)
-    audit(db, ctx.user.id, 'CUSTOMER_CREATED', 'customer', Number(r.lastInsertRowid), { name: input.name })
+    audit(db, ctx.user.id, 'CUSTOMER_CREATED', 'customer', Number(r.lastInsertRowid), { name: input.name, creditLimitCents: finalLimit })
     return Number(r.lastInsertRowid)
   }
   db.prepare(
     'UPDATE customers SET name = ?, phone = ?, address = ?, notes = ?, credit_limit_cents = ?, active = ?, updated_at = ? WHERE id = ?'
   ).run(input.name, input.phone || null, input.address || null, input.notes || null, limit, input.active ? 1 : 0, now, id)
-  audit(db, ctx.user.id, 'CUSTOMER_UPDATED', 'customer', id, { name: input.name, creditLimitCents: limit })
+  audit(db, ctx.user.id, 'CUSTOMER_UPDATED', 'customer', id, {
+    name: input.name,
+    from: { creditLimitCents: prevLimit },
+    to: { creditLimitCents: limit }
+  })
   return id
 }
 

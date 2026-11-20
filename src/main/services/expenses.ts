@@ -64,18 +64,42 @@ export function saveExpense(ctx: Ctx, id: number | null, raw: unknown) {
       audit(db, ctx.user.id, 'EXPENSE_CREATED', 'expense', Number(r.lastInsertRowid), { amountCents, description: input.description })
       return Number(r.lastInsertRowid)
     }
+    const prev = db
+      .prepare('SELECT description, category_id, amount_cents, expense_date, method_code, session_id FROM expenses WHERE id = ? AND deleted = 0')
+      .get(id) as
+      | { description: string; category_id: number; amount_cents: number; expense_date: string; method_code: string; session_id: number | null }
+      | undefined
+    if (!prev) throw new AppError('NOT_FOUND')
+    if (prev.session_id && ctx.user.role !== 'ADMIN') {
+      const sess = db.prepare('SELECT status FROM cash_sessions WHERE id = ?').get(prev.session_id) as { status: string } | undefined
+      if (sess?.status === 'closed') throw new AppError('FORBIDDEN', { permission: 'expenses.closed_session' })
+    }
     db.prepare(
       'UPDATE expenses SET description = ?, category_id = ?, amount_cents = ?, expense_date = ?, method_code = ?, notes = ? WHERE id = ? AND deleted = 0'
     ).run(input.description, input.categoryId, amountCents, input.expenseDate, input.method, input.notes || null, id)
-    audit(db, ctx.user.id, 'EXPENSE_UPDATED', 'expense', id, { amountCents, description: input.description })
+    audit(db, ctx.user.id, 'EXPENSE_UPDATED', 'expense', id, {
+      from: { amountCents: prev.amount_cents, description: prev.description, method: prev.method_code },
+      to: { amountCents, description: input.description, method: input.method }
+    })
     return id
   })()
 }
 
 export function deleteExpense(ctx: Ctx, id: number) {
   if (!hasPerm(ctx.user, 'expenses.manage')) throw new AppError('FORBIDDEN', { permission: 'expenses.manage' })
+  const prev = ctx.db
+    .prepare('SELECT description, amount_cents, session_id FROM expenses WHERE id = ? AND deleted = 0')
+    .get(id) as { description: string; amount_cents: number; session_id: number | null } | undefined
+  if (!prev) throw new AppError('NOT_FOUND')
+  if (prev.session_id && ctx.user.role !== 'ADMIN') {
+    const sess = ctx.db.prepare('SELECT status FROM cash_sessions WHERE id = ?').get(prev.session_id) as { status: string } | undefined
+    if (sess?.status === 'closed') throw new AppError('FORBIDDEN', { permission: 'expenses.closed_session' })
+  }
   ctx.db.prepare('UPDATE expenses SET deleted = 1 WHERE id = ?').run(id)
-  audit(ctx.db, ctx.user.id, 'EXPENSE_DELETED', 'expense', id)
+  audit(ctx.db, ctx.user.id, 'EXPENSE_DELETED', 'expense', id, {
+    amountCents: prev.amount_cents,
+    description: prev.description
+  })
 }
 
 export function listExpenses(db: DB, opts: { from?: string; to?: string; categoryId?: number; search?: string } = {}) {

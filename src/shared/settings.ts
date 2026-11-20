@@ -93,7 +93,8 @@ export const backupSettingsSchema = z.object({
   usbDir: z.string(),
   autoToUsb: z.boolean(),
   keepCount: z.number().int().min(3).max(500),
-  backupOnExit: z.boolean()
+  backupOnExit: z.boolean(),
+  encryptBackups: z.boolean().default(true)
 })
 
 export const settingsSchema = z.object({
@@ -176,12 +177,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   stock: { lowStockAlerts: true, expiryAlertDays: 30 },
   backup: {
     autoEnabled: true,
-    intervalHours: 24,
+    intervalHours: 1,
     localDir: '',
     usbDir: '',
     autoToUsb: false,
     keepCount: 30,
-    backupOnExit: true
+    backupOnExit: true,
+    encryptBackups: true
   }
 }
 

@@ -84,7 +84,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) return
     window.api
-      .getDashboard()
+      .getAlertCounts()
       .then((d) => setAlerts({ low: d.lowStockCount, out: d.outOfStockCount, exp: d.expiringCount }))
       .catch(() => undefined)
   }, [user, section])

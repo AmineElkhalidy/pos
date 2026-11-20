@@ -3,6 +3,11 @@ import { Download, FileDown } from 'lucide-react'
 import { useAppStore, useT } from '../store'
 import { formatMoney, formatQty } from '@shared/money'
 
+function escapeHtml(s: string | null | undefined): string {
+  if (!s) return ''
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 export function ReportsPage() {
   const { t, lang } = useT()
   const notify = useAppStore((s) => s.notify)
@@ -15,6 +20,8 @@ export function ReportsPage() {
   const [userId, setUserId] = useState<number | null>(null)
   const [section, setSection] = useState<'products' | 'categories' | 'cashiers' | 'stock' | 'low_stock' | 'debts'>('products')
   const [report, setReport] = useState<Awaited<ReturnType<typeof window.api.getComprehensiveReport>> | null>(null)
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 100
 
   const load = async () => {
     try {
@@ -73,7 +80,7 @@ export function ReportsPage() {
             ${report.byProduct
               .map(
                 (p) =>
-                  `<tr><td>${p.nameFr}</td><td>${formatQty(p.qtyMilli)} ${p.unitCode}</td><td>${formatMoney(p.revenueCents)}</td><td>${formatMoney(p.costCents)}</td><td>${formatMoney(p.grossProfitCents)}</td></tr>`
+                  `<tr><td>${escapeHtml(p.nameFr)}</td><td>${formatQty(p.qtyMilli)} ${escapeHtml(p.unitCode)}</td><td>${formatMoney(p.revenueCents)}</td><td>${formatMoney(p.costCents)}</td><td>${formatMoney(p.grossProfitCents)}</td></tr>`
               )
               .join('')}
           </tbody>
@@ -218,7 +225,10 @@ export function ReportsPage() {
         ).map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setSection(tab.id)}
+            onClick={() => {
+              setSection(tab.id)
+              setPage(0)
+            }}
             className={`rounded-lg px-3 py-1.5 ${
               section === tab.id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
             }`}
@@ -244,7 +254,7 @@ export function ReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {report.byProduct.map((p) => (
+                {report.byProduct.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((p) => (
                   <tr key={p.productId}>
                     <td className="px-4 py-2.5 font-bold">{p.nameFr}</td>
                     <td className="px-4 py-2.5 text-slate-500">{p.categoryName || '—'}</td>
@@ -336,7 +346,9 @@ export function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(section === 'low_stock' ? report.lowStock : report.stockValuation).map((p) => (
+                  {(section === 'low_stock' ? report.lowStock : report.stockValuation)
+                    .slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+                    .map((p) => (
                     <tr key={p.id}>
                       <td className="px-4 py-2.5 font-bold">{p.nameFr}</td>
                       <td className="px-4 py-2.5 text-end font-bold">
@@ -368,7 +380,7 @@ export function ReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {report.customerDebts.map((c) => (
+                {report.customerDebts.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((c) => (
                   <tr key={c.id}>
                     <td className="px-4 py-2.5 font-bold">{c.name}</td>
                     <td className="px-4 py-2.5">{c.phone || '—'}</td>
@@ -383,6 +395,44 @@ export function ReportsPage() {
               </tbody>
             </table>
           )}
+          {(() => {
+            const totalRows =
+              section === 'products'
+                ? report.byProduct.length
+                : section === 'stock'
+                  ? report.stockValuation.length
+                  : section === 'low_stock'
+                    ? report.lowStock.length
+                    : section === 'debts'
+                      ? report.customerDebts.length
+                      : 0
+            if (totalRows <= PAGE_SIZE) return null
+            return (
+              <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-2.5 text-xs">
+                <span className="text-slate-600">
+                  {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalRows)} / {totalRows}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={page === 0}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    disabled={(page + 1) * PAGE_SIZE >= totalRows}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>

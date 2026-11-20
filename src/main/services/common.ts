@@ -49,6 +49,24 @@ export function nextSequence(db: DB, name: string): number {
   return row.value
 }
 
+const settingsCache = new WeakMap<DB, AppSettings>()
+const dataRevisionMap = new WeakMap<DB, number>()
+
+export function getDataRevision(db: DB): number {
+  return dataRevisionMap.get(db) ?? 0
+}
+
+export function bumpDataRevision(db: DB): number {
+  const next = (dataRevisionMap.get(db) ?? 0) + 1
+  dataRevisionMap.set(db, next)
+  return next
+}
+
+export function invalidateSettingsCache(db: DB): void {
+  settingsCache.delete(db)
+  bumpDataRevision(db)
+}
+
 export function audit(
   db: DB,
   userId: number | null,
@@ -60,9 +78,12 @@ export function audit(
   db.prepare(
     'INSERT INTO audit_logs (user_id, action, entity, entity_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(userId, action, entity ?? null, entityId ?? null, details === undefined ? null : JSON.stringify(details), nowIso())
+  bumpDataRevision(db)
 }
 
 export function getSettings(db: DB): AppSettings {
+  const cached = settingsCache.get(db)
+  if (cached) return cached
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
   const map = new Map(rows.map((r) => [r.key, r.value]))
   const out = {} as Record<string, unknown>
@@ -75,18 +96,13 @@ export function getSettings(db: DB): AppSettings {
     }
     out[key] = { ...DEFAULT_SETTINGS[key], ...stored }
   }
-  return out as AppSettings
+  const result = out as AppSettings
+  settingsCache.set(db, result)
+  return result
 }
 
 export function getSetting<K extends SettingsSection>(db: DB, key: K): AppSettings[K] {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
-  let stored = {}
-  try {
-    stored = row ? JSON.parse(row.value) : {}
-  } catch {
-    stored = {}
-  }
-  return { ...DEFAULT_SETTINGS[key], ...stored }
+  return getSettings(db)[key]
 }
 
 /** Escapes LIKE wildcards in a user search term. */

@@ -87,12 +87,36 @@ export function PosPage() {
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [newCustName, setNewCustName] = useState('')
   const [newCustPhone, setNewCustPhone] = useState('')
+  const [submittingSale, setSubmittingSale] = useState(false)
+  const checkoutKeyRef = useRef<string | null>(null)
+  const completeSaleRef = useRef<(andPrint: boolean) => void>(() => undefined)
+
+  const loadProducts = async (searchStr = query, catId = categoryId) => {
+    try {
+      const prods = await window.api.listProducts({
+        status: 'active',
+        search: searchStr.trim() || undefined,
+        categoryId: catId ?? undefined,
+        limit: 60,
+        withImages: true
+      })
+      setProducts(prods.items)
+    } catch (err) {
+      notifyError(err)
+    }
+  }
 
   const loadCatalog = async () => {
     try {
       const [cats, prods, custs, pms, cs, sc] = await Promise.all([
         window.api.listCategories(),
-        window.api.listProducts({ status: 'active', limit: 300 }),
+        window.api.listProducts({
+          status: 'active',
+          search: query.trim() || undefined,
+          categoryId: categoryId ?? undefined,
+          limit: 60,
+          withImages: true
+        }),
         window.api.listCustomers(),
         window.api.listPaymentMethods(),
         window.api.currentCashSession(),
@@ -116,6 +140,19 @@ export function PosPage() {
     })
     return () => unsub()
   }, [])
+
+  // Debounced server-side search across the entire product database (supports 5,000+ products)
+  const firstSearchRun = useRef(true)
+  useEffect(() => {
+    if (firstSearchRun.current) {
+      firstSearchRun.current = false
+      return
+    }
+    const timer = setTimeout(() => {
+      loadProducts(query, categoryId)
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [query, categoryId])
 
   // Handle USB HID barcode scan anywhere on the POS screen
   const handleBarcodeCode = async (rawCode: string) => {
@@ -144,10 +181,10 @@ export function PosPage() {
         searchRef.current?.focus()
       } else if (e.key === 'F9') {
         e.preventDefault()
-        handleCompleteSale(false)
+        completeSaleRef.current(false)
       } else if (e.key === 'F10') {
         e.preventDefault()
-        handleCompleteSale(true)
+        completeSaleRef.current(true)
       } else if (e.key === 'Escape' && !weightProduct && !showCashModal && !showHistoryModal) {
         if (cart.length > 0 && confirm(lang === 'ar' ? 'إلغاء السلة الحالية؟' : 'Vider le panier en cours ?')) {
           clearCart()
@@ -156,7 +193,7 @@ export function PosPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  })
+  }, [weightProduct, showCashModal, showHistoryModal, cart.length, lang, clearCart])
 
   const handleSelectProduct = (product: ProductRow) => {
     if (isMeasuredUnit(product.unitCode) || product.productType === 'weight' || product.productType === 'volume') {
@@ -242,7 +279,15 @@ export function PosPage() {
   }
 
   const handleCompleteSale = async (andPrint: boolean) => {
-    if (cart.length === 0) return
+    if (cart.length === 0 || submittingSale) return
+    setSubmittingSale(true)
+    if (!checkoutKeyRef.current) {
+      checkoutKeyRef.current =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `sale-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    }
+    const idempotencyKey = checkoutKeyRef.current
     try {
       const paymentsPayload = splitMode
         ? splitPayments
@@ -280,9 +325,11 @@ export function PosPage() {
             }
           : null,
         customerId: selectedCustomerId,
-        payments: paymentsPayload
+        payments: paymentsPayload,
+        idempotencyKey
       })
 
+      checkoutKeyRef.current = null
       clearCart()
       setTenderedInput('')
       setSplitPayments([
@@ -290,7 +337,12 @@ export function PosPage() {
         { method: 'CARD', amount: '' }
       ])
       notify('success', `${sale.invoiceNo} — ${formatMoney(sale.totalCents, lang)}`)
-      loadCatalog()
+      // Lightweight post-sale refresh (avoid re-fetching all customers/categories/scale)
+      Promise.all([
+        loadProducts(query, categoryId),
+        window.api.currentCashSession().then((cs) => setCashSession(cs)),
+        sale.creditCents > 0 ? window.api.listCustomers().then((custs) => setCustomers(custs)) : Promise.resolve()
+      ]).catch(() => undefined)
 
       if (andPrint) {
         const html = await window.api.getSaleReceiptHtml(sale.id)
@@ -308,9 +360,13 @@ export function PosPage() {
         })
       }
     } catch (err) {
+      checkoutKeyRef.current = null
       notifyError(err)
+    } finally {
+      setSubmittingSale(false)
     }
   }
+  completeSaleRef.current = handleCompleteSale
 
   const handleOpenOrCloseCash = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -389,17 +445,7 @@ export function PosPage() {
     }
   }
 
-  const filteredProducts = products.filter((p) => {
-    if (categoryId && p.categoryId !== categoryId) return false
-    if (!query.trim()) return true
-    const q = query.toLowerCase()
-    return (
-      p.nameFr.toLowerCase().includes(q) ||
-      (p.nameAr && p.nameAr.includes(q)) ||
-      (p.sku && p.sku.toLowerCase().includes(q)) ||
-      p.barcodes.some((b) => b.code.toLowerCase().includes(q))
-    )
-  })
+  const filteredProducts = products
 
   // Weight modal live price preview
   let weightPreviewMilli = 0
@@ -864,21 +910,21 @@ export function PosPage() {
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || submittingSale}
               onClick={() => handleCompleteSale(false)}
               className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-3 text-xs font-bold text-white shadow-sm hover:bg-slate-800 disabled:opacity-40"
             >
               <CheckCircle2 className="h-4 w-4" />
-              {t.pos.completeSale}
+              {submittingSale ? t.common.loading : t.pos.completeSale}
             </button>
             <button
               type="button"
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || submittingSale}
               onClick={() => handleCompleteSale(true)}
               className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-40"
             >
               <Printer className="h-4 w-4" />
-              {t.pos.completeAndPrint}
+              {submittingSale ? t.common.loading : t.pos.completeAndPrint}
             </button>
           </div>
         </div>
