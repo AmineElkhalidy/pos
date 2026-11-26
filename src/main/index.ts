@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { closeDatabase, openDatabase, quickIntegrityCheck, type DB } from './db/connection'
@@ -81,11 +81,12 @@ function scheduleAutoBackups(): void {
 }
 
 function createMainWindow(): BrowserWindow {
+  const { width: waW, height: waH } = screen.getPrimaryDisplay().workAreaSize
   const win = new BrowserWindow({
-    width: 1400,
-    height: 880,
-    minWidth: 1024,
-    minHeight: 680,
+    width: Math.min(1400, waW),
+    height: Math.min(880, waH),
+    minWidth: 800,
+    minHeight: 560,
     title: 'Smart POS',
     show: false,
     autoHideMenuBar: true,
@@ -99,6 +100,9 @@ function createMainWindow(): BrowserWindow {
   })
 
   win.on('ready-to-show', () => {
+    if (waW <= 1366 || waH <= 768) {
+      win.maximize()
+    }
     win.show()
   })
 

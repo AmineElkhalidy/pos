@@ -17,6 +17,7 @@ import * as reportsSvc from './services/reports'
 import * as settingsSvc from './services/settings'
 import * as backupSvc from './services/backup'
 import * as printingSvc from './services/printing'
+import * as oskSvc from './services/osk'
 import { scaleService } from './services/scale'
 import type { IpcResponse } from '@shared/ipc'
 
@@ -94,6 +95,13 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     usersSvc.changeOwnPassword(getCtx(), current, next)
   })
 
+  handle('auth:verifyAdminApproval', (adminPassword: string, action: 'discount', details?: Record<string, unknown>) => {
+    return usersSvc.verifyAdminApproval(getCtx(), adminPassword, action, details)
+  })
+
+  handle('system:openTouchKeyboard', () => oskSvc.openTouchKeyboard())
+  handle('system:closeTouchKeyboard', () => oskSvc.closeTouchKeyboard())
+
   handle('auth:setLanguage', (lang: 'fr' | 'ar') => {
     const db = getDb()
     if (activeUserId) {
@@ -141,6 +149,13 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
       throw new AppError('FORBIDDEN', { permission: 'products.view' })
     }
     return productsSvc.listProducts(ctx.db, opts)
+  })
+  handle('products:frequent', (limit?: number) => {
+    const ctx = getCtx()
+    if (!hasPerm(ctx.user, 'products.view') && !hasPerm(ctx.user, 'pos.sell')) {
+      throw new AppError('FORBIDDEN', { permission: 'pos.sell' })
+    }
+    return productsSvc.listFrequentProducts(ctx.db, limit)
   })
   handle('products:get', (id: number) => {
     const ctx = getCtx()

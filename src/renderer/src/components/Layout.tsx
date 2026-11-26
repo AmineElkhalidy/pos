@@ -21,7 +21,9 @@ import {
   Printer,
   FileDown,
   X,
-  Store
+  Store,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react'
 import { useAppStore, useT, type NavSection } from '../store'
 import { ErrorBanner } from './ErrorBanner'
@@ -71,6 +73,35 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [newPw, setNewPw] = useState('')
   const [showNotif, setShowNotif] = useState(false)
   const [alerts, setAlerts] = useState<{ low: number; out: number; exp: number }>({ low: 0, out: 0, exp: 0 })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('smartpos_sidebar_collapsed')
+      if (saved !== null) return saved === '1'
+    } catch {
+      // ignore
+    }
+    return typeof window !== 'undefined' && window.innerWidth < 1150
+  })
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem('smartpos_sidebar_collapsed', next ? '1' : '0')
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 1024) setSidebarCollapsed(true)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 15_000)
@@ -125,11 +156,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-100 text-slate-900">
-      {/* Persistent Navy Sidebar */}
-      <aside className="flex w-64 shrink-0 flex-col bg-[#0f172a] text-slate-200 shadow-xl">
-        <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-4">
+      {/* Collapsible Persistent Navy Sidebar */}
+      <aside
+        className={`flex shrink-0 flex-col bg-[#0f172a] text-slate-200 shadow-xl transition-all duration-200 ${
+          sidebarCollapsed ? 'w-16' : 'w-56 xl:w-64'
+        }`}
+      >
+        <div
+          className={`flex h-14 sm:h-16 items-center border-b border-slate-800 ${
+            sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-4'
+          }`}
+        >
           {settings?.store.logoDataUrl ? (
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow">
+            <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow">
               <img
                 src={settings.store.logoDataUrl}
                 alt={settings.store.name || t.appName}
@@ -137,19 +176,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
               />
             </div>
           ) : (
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow">
+            <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow">
               <Store className="h-5 w-5" />
             </div>
           )}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-bold tracking-tight text-white">
-              {settings?.store.name || t.appName}
+          {!sidebarCollapsed && (
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm xl:text-base font-bold tracking-tight text-white">
+                {settings?.store.name || t.appName}
+              </div>
+              <div className="truncate text-[11px] text-slate-400">{t.appSubtitle}</div>
             </div>
-            <div className="truncate text-xs text-slate-400">{t.appSubtitle}</div>
-          </div>
+          )}
         </div>
 
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
+        <nav className={`flex-1 space-y-0.5 overflow-y-auto py-3 ${sidebarCollapsed ? 'px-1.5' : 'px-2.5'}`}>
           {NAV_ITEMS.filter((item) => canAccess(item.perm)).map((item) => {
             const Icon = item.icon
             const active = section === item.id
@@ -157,44 +198,74 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <button
                 key={item.id}
                 onClick={() => setSection(item.id)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                title={t.nav[item.id]}
+                className={`flex w-full items-center rounded-lg py-2.5 text-sm font-medium transition ${
+                  sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-3'
+                } ${
                   active
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
                 }`}
               >
                 <Icon className="h-4 w-4 shrink-0" />
-                <span className="truncate">{t.nav[item.id]}</span>
+                {!sidebarCollapsed && <span className="truncate">{t.nav[item.id]}</span>}
               </button>
             )
           })}
         </nav>
 
-        <div className="border-t border-slate-800 p-3 text-xs text-slate-400">
-          <div className="flex items-center justify-between">
-            <span>Smart POS v1.0.0</span>
-            <span className="rounded bg-emerald-950 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-              Offline SQLite
-            </span>
-          </div>
+        <div className="border-t border-slate-800 p-2.5 text-xs text-slate-400">
+          {sidebarCollapsed ? (
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="flex w-full items-center justify-center rounded-lg py-1.5 text-slate-300 hover:bg-slate-800 hover:text-white"
+              title={lang === 'ar' ? 'توسيع القائمة' : 'Déplier le menu'}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">Smart POS v1.0</span>
+              <span className="shrink-0 rounded bg-emerald-950 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                Offline
+              </span>
+            </div>
+          )}
         </div>
       </aside>
 
       {/* Main Content Area */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Top Navigation Bar */}
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-xs">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-slate-800">{t.nav[section]}</h1>
+        <header className="flex h-14 sm:h-16 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 sm:px-5 shadow-xs">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              title={
+                sidebarCollapsed
+                  ? lang === 'ar'
+                    ? 'توسيع القائمة الجانبية'
+                    : 'Déplier la barre latérale'
+                  : lang === 'ar'
+                    ? 'طي القائمة الجانبية'
+                    : 'Réduire la barre latérale'
+              }
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
+            <h1 className="truncate text-base sm:text-lg font-bold text-slate-800">{t.nav[section]}</h1>
             {cashSession ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
+              <span className="hidden sm:inline-flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
                 {t.pos.cashSession} #{cashSession.id}
               </span>
             ) : (
               <button
                 onClick={() => setSection('pos')}
-                className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/20 hover:bg-amber-100"
+                className="hidden sm:inline-flex shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/20 hover:bg-amber-100"
               >
                 <span className="h-2 w-2 rounded-full bg-amber-500" />
                 {t.pos.openRegister}
@@ -202,9 +273,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
             {/* Date & Time */}
-            <div className="hidden rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 md:block">
+            <div className="hidden rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 xl:block">
               {now.toLocaleDateString(lang === 'ar' ? 'ar-MA' : 'fr-MA', {
                 weekday: 'short',
                 day: '2-digit',
@@ -217,11 +288,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
             {/* Language Switcher */}
             <button
               onClick={handleToggleLanguage}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               title="Français / العربية"
             >
               <Globe className="h-4 w-4 text-emerald-600" />
-              <span>{lang === 'fr' ? 'العربية' : 'Français'}</span>
+              <span className="hidden sm:inline">{lang === 'fr' ? 'العربية' : 'Français'}</span>
             </button>
 
             {/* Notifications */}
@@ -325,7 +396,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* Active Module Workspace */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-5">
           <ErrorBanner className="mb-4" />
           {children}
         </main>

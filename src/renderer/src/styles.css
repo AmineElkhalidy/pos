@@ -11,6 +11,12 @@
   html[dir="rtl"] body {
     font-family: "Cairo", "Segoe UI", Tahoma, sans-serif;
   }
+  button,
+  [role="button"],
+  input,
+  select {
+    touch-action: manipulation;
+  }
 }
 
 /* Custom subtle scrollbars */

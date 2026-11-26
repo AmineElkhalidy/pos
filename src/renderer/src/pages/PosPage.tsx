@@ -459,9 +459,9 @@ export function PosPage() {
   const weightPreviewCents = weightProduct ? lineAmount(weightPreviewMilli, weightProduct.salePriceCents) : 0
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] gap-5 overflow-hidden">
+    <div className="flex flex-col gap-3 md:h-[calc(100vh-5.75rem)] md:flex-row md:gap-4 md:overflow-hidden">
       {/* LEFT: Product Search, Category Pills, and Grid */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+      <div className="flex min-h-[420px] min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs md:min-h-0">
         {/* Top Search & Action Bar */}
         <div className="flex flex-wrap items-center gap-2.5 border-b border-slate-200 p-3.5">
           <div className="relative flex-1">
@@ -536,7 +536,7 @@ export function PosPage() {
           {filteredProducts.length === 0 ? (
             <div className="py-16 text-center text-sm text-slate-400">{t.common.noData}</div>
           ) : (
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3 xl:grid-cols-4">
               {filteredProducts.map((p) => {
                 const measured = isMeasuredUnit(p.unitCode)
                 const out = p.stockMilli <= 0
@@ -599,7 +599,7 @@ export function PosPage() {
       </div>
 
       {/* RIGHT: Active Sales Cart & Checkout */}
-      <div className="flex w-[440px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+      <div className="flex w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs md:w-[330px] lg:w-[380px] xl:w-[430px]">
         {/* Customer Selector Header */}
         <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="flex flex-1 items-center gap-2">
@@ -825,7 +825,7 @@ export function PosPage() {
 
             {!splitMode ? (
               <>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-4">
                   {paymentMethods.map((pm) => (
                     <button
                       key={pm.code}

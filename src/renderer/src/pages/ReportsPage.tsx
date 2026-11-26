@@ -240,7 +240,7 @@ export function ReportsPage() {
 
       {/* Report Tables */}
       {report && (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
           {section === 'products' && (
             <table className="w-full text-xs">
               <thead className="bg-slate-50 text-slate-600">

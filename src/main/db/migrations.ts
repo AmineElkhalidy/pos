@@ -452,6 +452,18 @@ BEGIN
   SELECT RAISE(ABORT, 'AUDIT_LOGS_IMMUTABLE');
 END;
 `
+  },
+  {
+    version: 3,
+    name: 'grant_cashier_products_categories_prices',
+    sql: `
+-- Grant existing CASHIER role permissions to manage products, product prices, and categories
+INSERT OR IGNORE INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r
+JOIN permissions p ON p.code IN ('products.manage', 'products.prices', 'categories.manage')
+WHERE r.code = 'CASHIER';
+`
   }
 ]
 

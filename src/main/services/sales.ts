@@ -4,6 +4,7 @@ import { AppError, audit, getSettings, hasPerm, likeTerm, nextSequence, nowIso, 
 import { applyStockMovement } from './stock'
 import { getCustomerBalance } from './partners'
 import { cashMethodCodes, getOpenSession, sessionIdForCash, isCashMethod } from './cash'
+import { consumeAdminApproval } from './users'
 import { allocatePayments, computeCart, type Discount } from '@shared/cart'
 import { lineAmount, percentOf, toCents } from '@shared/money'
 import { compatibleUnits, toProductMilli, type UnitCode } from '@shared/units'
@@ -31,7 +32,8 @@ export const saleInputSchema = z.object({
   customerId: z.number().int().positive().nullable().optional(),
   payments: z.array(z.object({ method: z.string().min(1), amount: decimalInput })).default([]),
   notes: z.string().max(500).optional().nullable(),
-  idempotencyKey: z.string().trim().min(1).max(100).optional().nullable()
+  idempotencyKey: z.string().trim().min(1).max(100).optional().nullable(),
+  discountApprovalToken: z.string().trim().min(1).max(128).optional().nullable()
 })
 
 export type SaleInput = z.input<typeof saleInputSchema>
@@ -111,8 +113,10 @@ export function createSale(ctx: Ctx, raw: unknown) {
       cartDiscount
     )
 
-    // ---- discount authorization
-    if (cart.totalDiscountCents > 0) {
+    // ---- discount authorization (supports single-use local Admin approval token)
+    const discountApproval =
+      cart.totalDiscountCents > 0 ? consumeAdminApproval(input.discountApprovalToken, ctx.user.id, 'discount') : null
+    if (cart.totalDiscountCents > 0 && !discountApproval) {
       if (!hasPerm(ctx.user, 'pos.discount')) throw new AppError('FORBIDDEN', { permission: 'pos.discount' })
       if (!isAdmin && cart.grossCents > 0) {
         const maxAllowed = percentOf(cart.grossCents, settings.sales.maxCashierDiscountPercent)
@@ -121,7 +125,7 @@ export function createSale(ctx: Ctx, raw: unknown) {
       }
     }
     // ---- minimum selling price (net of discounts)
-    if (settings.sales.enforceMinPrice && !isAdmin) {
+    if (settings.sales.enforceMinPrice && !isAdmin && !discountApproval) {
       lines.forEach((l, i) => {
         if (l.p.min_sale_price_cents !== null) {
           const minTotal = lineAmount(l.qtyMilli, l.p.min_sale_price_cents)
@@ -236,7 +240,11 @@ export function createSale(ctx: Ctx, raw: unknown) {
     for (const p of alloc.applied) if (p.amountCents > 0) insPay.run(saleId, p.method, p.amountCents, now)
 
     if (cart.totalDiscountCents > 0) {
-      audit(db, ctx.user.id, 'SALE_DISCOUNT', 'sale', saleId, { invoiceNo, discountCents: cart.totalDiscountCents })
+      audit(db, ctx.user.id, 'SALE_DISCOUNT', 'sale', saleId, {
+        invoiceNo,
+        discountCents: cart.totalDiscountCents,
+        ...(discountApproval ? { approvedByAdminId: discountApproval.approvedByAdminId, approvedByAdminName: discountApproval.approvedByAdminName } : {})
+      })
     }
     audit(db, ctx.user.id, 'SALE_COMPLETED', 'sale', saleId, { invoiceNo, totalCents: cart.totalCents, creditCents: alloc.creditCents })
     return saleId

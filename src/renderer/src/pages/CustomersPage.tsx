@@ -165,7 +165,7 @@ export function CustomersPage() {
           />
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
           <table className="w-full text-xs">
             <thead className="bg-slate-50 text-slate-600">
               <tr className="border-b border-slate-200">

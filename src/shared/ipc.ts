@@ -30,7 +30,14 @@ export interface SmartPosApi {
   login(username: string, password: string): Promise<SessionUser>
   logout(): Promise<void>
   changeOwnPassword(current: string, next: string): Promise<void>
+  verifyAdminApproval(
+    adminPassword: string,
+    action: 'discount',
+    details?: Record<string, unknown>
+  ): Promise<{ token: string; approvedByAdminId: number; approvedByAdminName: string }>
   setLanguage(lang: 'fr' | 'ar'): Promise<void>
+  openTouchKeyboard(): Promise<{ ok: boolean; method: string }>
+  closeTouchKeyboard(): Promise<{ ok: boolean }>
 
   // Dashboard
   getDashboard(): Promise<DashboardData>
@@ -43,6 +50,7 @@ export interface SmartPosApi {
 
   // Products & Barcodes
   listProducts(opts?: ProductListOptions): Promise<{ total: number; items: ProductRow[] }>
+  listFrequentProducts(limit?: number): Promise<ProductRow[]>
   getProduct(id: number): Promise<ProductRow>
   lookupByCode(code: string): Promise<ProductRow | null>
   saveProduct(id: number | null, data: unknown): Promise<number>

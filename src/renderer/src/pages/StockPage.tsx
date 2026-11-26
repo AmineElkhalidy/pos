@@ -186,7 +186,7 @@ export function StockPage() {
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
             <table className="w-full text-xs">
               <thead className="bg-slate-50 text-slate-600">
                 <tr className="border-b border-slate-200">
@@ -260,7 +260,7 @@ export function StockPage() {
               <option value="INVENTORY">INVENTORY (Inventaire)</option>
             </select>
           </div>
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
             <table className="w-full text-xs">
               <thead className="bg-slate-50 text-slate-600">
                 <tr className="border-b border-slate-200">
@@ -331,7 +331,7 @@ export function StockPage() {
           </div>
 
           {activeCount && (
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
               <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-xs">
                 <span className="font-bold">
                   Inventaire #{activeCount.id} ({activeCount.status}) — {new Date(activeCount.createdAt).toLocaleString('fr-MA')}

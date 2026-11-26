@@ -1,8 +1,87 @@
 import { z } from 'zod'
+import { randomBytes } from 'node:crypto'
 import type { DB } from '../db/connection'
 import { isPermission, PERMISSIONS, type Permission, type RoleCode } from '@shared/permissions'
 import { AppError, audit, nowIso, type Ctx, type SessionUser } from './common'
 import { hashPassword, verifyPassword } from './password'
+
+// Single-use, short-lived local Admin approval tokens (e.g. for cashier discount authorization)
+interface ApprovalRecord {
+  token: string
+  requestedByUserId: number
+  approvedByAdminId: number
+  approvedByAdminName: string
+  action: 'discount'
+  expiresAt: number
+}
+const approvalTokens = new Map<string, ApprovalRecord>()
+
+function pruneApprovalTokens(): void {
+  const now = Date.now()
+  for (const [k, v] of approvalTokens) {
+    if (v.expiresAt <= now) approvalTokens.delete(k)
+  }
+}
+
+/**
+ * Verifies a local Admin password for a single sensitive operation (e.g., cashier discount)
+ * and issues a single-use 5-minute approval token. Never logs or returns the password.
+ */
+export function verifyAdminApproval(
+  ctx: Ctx,
+  adminPassword: string,
+  action: 'discount',
+  details?: Record<string, unknown>
+): { token: string; approvedByAdminId: number; approvedByAdminName: string } {
+  pruneApprovalTokens()
+  if (!adminPassword || !adminPassword.trim()) throw new AppError('PASSWORD_REQUIRED')
+  const admins = ctx.db
+    .prepare(
+      `SELECT u.id, u.full_name, u.password_hash
+       FROM users u JOIN roles r ON r.id = u.role_id
+       WHERE r.code = 'ADMIN' AND u.active = 1`
+    )
+    .all() as { id: number; full_name: string; password_hash: string }[]
+
+  const matched = admins.find((a) => verifyPassword(adminPassword, a.password_hash))
+  if (!matched) {
+    audit(ctx.db, ctx.user.id, 'ADMIN_APPROVAL_FAILED', 'auth', null, { action, requestedBy: ctx.user.username })
+    throw new AppError('WRONG_PASSWORD')
+  }
+
+  const token = randomBytes(24).toString('hex')
+  approvalTokens.set(token, {
+    token,
+    requestedByUserId: ctx.user.id,
+    approvedByAdminId: matched.id,
+    approvedByAdminName: matched.full_name,
+    action,
+    expiresAt: Date.now() + 5 * 60_000
+  })
+  audit(ctx.db, ctx.user.id, 'ADMIN_APPROVAL_GRANTED', 'auth', matched.id, {
+    action,
+    requestedBy: ctx.user.username,
+    approvedBy: matched.full_name,
+    ...(details ?? {})
+  })
+  return { token, approvedByAdminId: matched.id, approvedByAdminName: matched.full_name }
+}
+
+/** Consumes a single-use approval token inside a transaction. Returns the approving admin info or null. */
+export function consumeAdminApproval(
+  token: string | null | undefined,
+  userId: number,
+  action: 'discount'
+): { approvedByAdminId: number; approvedByAdminName: string } | null {
+  if (!token) return null
+  pruneApprovalTokens()
+  const rec = approvalTokens.get(token)
+  if (!rec || rec.requestedByUserId !== userId || rec.action !== action || rec.expiresAt <= Date.now()) {
+    return null
+  }
+  approvalTokens.delete(token)
+  return { approvedByAdminId: rec.approvedByAdminId, approvedByAdminName: rec.approvedByAdminName }
+}
 
 interface UserRow {
   id: number

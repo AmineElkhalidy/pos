@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'no
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openDatabase, integrityCheck, quickIntegrityCheck, type DB } from '../src/main/db/connection'
-import { login, saveUser, setCashierPermissions } from '../src/main/services/users'
-import { saveProduct, getProduct, listProducts } from '../src/main/services/products'
+import { login, saveUser, setCashierPermissions, verifyAdminApproval } from '../src/main/services/users'
+import { saveProduct, getProduct, listProducts, listFrequentProducts, saveCategory } from '../src/main/services/products'
 import { openSession, closeSession } from '../src/main/services/cash'
 import { createSale } from '../src/main/services/sales'
 import { saveCustomer, getCustomer } from '../src/main/services/partners'
@@ -329,6 +329,133 @@ describe('Smart POS — Security, Data Integrity & Reliability Suite', () => {
     expect(html).toContain('+212 5 22 11 22 33')
     expect(html).toContain('Bienvenue chez Épicerie Atlas ! مرحبا بكم')
     expect(html).toContain('Merci pour votre achat !')
+  })
+
+  it('computes frequently sold products from sales history and supports single-use Admin password approval for cashier discounts', () => {
+    const p1 = saveProduct(adminCtx, null, {
+      nameFr: 'Huile Olive 1L',
+      nameAr: 'زيت الزيتون',
+      unitCode: 'pc',
+      productType: 'standard',
+      purchasePrice: '60',
+      salePrice: '90',
+      initialStock: '50'
+    })
+    const p2 = saveProduct(adminCtx, null, {
+      nameFr: 'Miel Thym 500g',
+      nameAr: 'عسل الزعتر',
+      unitCode: 'kg',
+      productType: 'weight',
+      purchasePrice: '100',
+      salePrice: '150',
+      initialStock: '20'
+    })
+
+    // Create 2 sales for p1 and 1 sale for p2 -> p1 should rank #1 in frequent products
+    createSale(adminCtx, { items: [{ productId: p1, qty: '1' }], payments: [{ method: 'CASH', amount: '90' }] })
+    createSale(adminCtx, { items: [{ productId: p1, qty: '1' }], payments: [{ method: 'CASH', amount: '90' }] })
+    createSale(adminCtx, { items: [{ productId: p2, qty: '0.5', entryUnit: 'kg' }], payments: [{ method: 'CASH', amount: '75' }] })
+
+    const freq = listFrequentProducts(db, 10)
+    expect(freq.length).toBe(2)
+    expect(freq[0].id).toBe(p1)
+    expect(freq[1].id).toBe(p2)
+
+    // Create a cashier and verify 25% discount (above 10% limit) fails without Admin approval
+    saveUser(adminCtx, null, {
+      username: 'caissier_touch',
+      fullName: 'Sara Touch',
+      role: 'CASHIER',
+      active: true,
+      password: 'password123'
+    })
+    const cashier = login(db, 'caissier_touch', 'password123')
+    const cashierCtx: Ctx = { db, user: cashier }
+    openSession(cashierCtx, '200')
+
+    expect(() =>
+      createSale(cashierCtx, {
+        items: [{ productId: p1, qty: '1' }],
+        cartDiscount: { type: 'percent', value: 25 },
+        payments: [{ method: 'CASH', amount: '67.50' }]
+      })
+    ).toThrow(/DISCOUNT_EXCEEDS_LIMIT/)
+
+    // Wrong Admin password must fail
+    expect(() => verifyAdminApproval(cashierCtx, 'wrongpass', 'discount')).toThrow(/WRONG_PASSWORD/)
+
+    // Valid Admin password grants a single-use token
+    const approval = verifyAdminApproval(cashierCtx, 'admin123', 'discount', { percent: 25 })
+    expect(approval.token.length).toBeGreaterThan(20)
+
+    const approvedSale = createSale(cashierCtx, {
+      items: [{ productId: p1, qty: '1' }],
+      cartDiscount: { type: 'percent', value: 25 },
+      payments: [{ method: 'CASH', amount: '67.50' }],
+      discountApprovalToken: approval.token
+    })
+    expect(approvedSale.totalCents).toBe(6750)
+
+    // Reusing the same token must fail (single-use)
+    expect(() =>
+      createSale(cashierCtx, {
+        items: [{ productId: p1, qty: '1' }],
+        cartDiscount: { type: 'percent', value: 25 },
+        payments: [{ method: 'CASH', amount: '67.50' }],
+        discountApprovalToken: approval.token
+      })
+    ).toThrow(/DISCOUNT_EXCEEDS_LIMIT/)
+
+    // Audit log must record the approval without exposing the password
+    const auditRow = db
+      .prepare(`SELECT details FROM audit_logs WHERE action = 'ADMIN_APPROVAL_GRANTED' ORDER BY id DESC LIMIT 1`)
+      .get() as { details: string } | undefined
+    expect(auditRow).toBeTruthy()
+    expect(auditRow!.details).not.toContain('admin123')
+  })
+
+  it('allows default CASHIER role to add categories, add products, and edit existing product prices', () => {
+    saveUser(adminCtx, null, {
+      username: 'caissier_catalog',
+      fullName: 'Nadia Catalog',
+      role: 'CASHIER',
+      active: true,
+      password: 'password123'
+    })
+    const cashier = login(db, 'caissier_catalog', 'password123')
+    const cashierCtx: Ctx = { db, user: cashier }
+
+    expect(cashier.permissions).toContain('categories.manage')
+    expect(cashier.permissions).toContain('products.manage')
+    expect(cashier.permissions).toContain('products.prices')
+
+    const catId = saveCategory(cashierCtx, null, { nameFr: 'Épices', nameAr: 'التوابل', active: true })
+    expect(catId).toBeGreaterThan(0)
+
+    const prodId = saveProduct(cashierCtx, null, {
+      nameFr: 'Cumin Moulu',
+      nameAr: 'كمون مطحون',
+      categoryId: catId,
+      unitCode: 'kg',
+      productType: 'weight',
+      purchasePrice: '80',
+      salePrice: '120',
+      initialStock: '5'
+    })
+    expect(getProduct(db, prodId).salePriceCents).toBe(12000)
+
+    // Cashier edits existing product's price
+    saveProduct(cashierCtx, prodId, {
+      nameFr: 'Cumin Moulu',
+      nameAr: 'كمون مطحون',
+      categoryId: catId,
+      unitCode: 'kg',
+      productType: 'weight',
+      purchasePrice: '85',
+      salePrice: '130'
+    })
+    expect(getProduct(db, prodId).salePriceCents).toBe(13000)
+    expect(getProduct(db, prodId).purchasePriceCents).toBe(8500)
   })
 })
 

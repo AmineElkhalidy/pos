@@ -157,7 +157,7 @@ export function ExpensesPage() {
         )}
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs lg:col-span-2">
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs lg:col-span-2">
         <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs">
           <span className="font-bold text-slate-800">{t.expenses.title}</span>
           {data && (

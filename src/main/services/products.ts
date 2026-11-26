@@ -206,6 +206,36 @@ export function listProducts(db: DB, opts: ProductListOptions = {}) {
   return { total, items: hydrate(db, rows, opts.withImages ?? true) }
 }
 
+/**
+ * Returns the most frequently sold active products based on actual sales history
+ * (last 90 days), falling back to recently updated active products if sales history is empty.
+ */
+export function listFrequentProducts(db: DB, limit = 12): ProductRow[] {
+  const safeLimit = Math.max(1, Math.min(limit, 40))
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400_000).toISOString()
+  const rows = db
+    .prepare(
+      `SELECT p.id, p.name_fr AS nameFr, p.name_ar AS nameAr, p.sku, p.category_id AS categoryId,
+        c.name_fr AS categoryName, c.name_ar AS categoryNameAr, p.unit_code AS unitCode, p.product_type AS productType,
+        p.purchase_price_cents AS purchasePriceCents, p.avg_cost_cents AS avgCostCents, p.sale_price_cents AS salePriceCents,
+        p.min_sale_price_cents AS minSalePriceCents, p.stock_milli AS stockMilli, p.min_stock_milli AS minStockMilli,
+        p.track_expiry AS trackExpiry, p.expiry_date AS expiryDate, p.image_path AS image, p.notes, p.active, p.archived,
+        p.created_at AS createdAt, p.updated_at AS updatedAt,
+        COUNT(si.id) AS saleFreq
+       FROM sale_items si
+       JOIN sales s ON s.id = si.sale_id
+       JOIN products p ON p.id = si.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       WHERE s.created_at >= ? AND p.archived = 0 AND p.active = 1
+       GROUP BY p.id
+       ORDER BY saleFreq DESC, p.name_fr COLLATE NOCASE
+       LIMIT ?`
+    )
+    .all(ninetyDaysAgo, safeLimit) as Record<string, unknown>[]
+  if (rows.length > 0) return hydrate(db, rows, true)
+  return []
+}
+
 export function getProduct(db: DB, id: number): ProductRow {
   const row = db.prepare(`${PRODUCT_SELECT} WHERE p.id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) throw new AppError('PRODUCT_NOT_FOUND')

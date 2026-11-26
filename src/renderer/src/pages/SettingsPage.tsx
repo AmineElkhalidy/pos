@@ -814,7 +814,7 @@ export function SettingsPage() {
           </div>
 
           {/* Backup History */}
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
             <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 font-bold">
               <span>Historique des sauvegardes ({backups.length})</span>
               {dbInfo && (

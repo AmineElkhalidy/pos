@@ -95,7 +95,7 @@ export function CreditsPage() {
       </div>
 
       {/* Debtors Table */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-800">
           Clients ayant un crédit en cours
         </div>
@@ -159,7 +159,7 @@ export function CreditsPage() {
       </div>
 
       {/* Payment History Table */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-800">
           {t.customers.paymentHistory}
         </div>

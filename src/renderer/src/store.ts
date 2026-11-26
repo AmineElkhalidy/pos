@@ -71,6 +71,7 @@ interface AppState {
   updateCartItemQty: (key: string, entryQty: string, entryUnit?: UnitCode) => void
   updateCartItemDiscount: (key: string, discount: Discount | null) => void
   removeCartItem: (key: string) => void
+  restoreCartItem: (item: PosCartItem, index?: number) => void
   setCartDiscount: (d: Discount | null) => void
   setSelectedCustomerId: (id: number | null) => void
   clearCart: () => void
@@ -243,6 +244,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeCartItem: (key) =>
     set((s) => {
       const nextCart = s.cart.filter((it) => it.key !== key)
+      saveCartDraft({ cart: nextCart, cartDiscount: s.cartDiscount, selectedCustomerId: s.selectedCustomerId })
+      return { cart: nextCart }
+    }),
+  restoreCartItem: (item, index) =>
+    set((s) => {
+      if (s.cart.some((it) => it.key === item.key)) return s
+      const nextCart = [...s.cart]
+      if (index !== undefined && index >= 0 && index <= nextCart.length) {
+        nextCart.splice(index, 0, item)
+      } else {
+        nextCart.push(item)
+      }
       saveCartDraft({ cart: nextCart, cartDiscount: s.cartDiscount, selectedCustomerId: s.selectedCustomerId })
       return { cart: nextCart }
     }),

@@ -26,7 +26,10 @@ const api: SmartPosApi = {
   login: (username, password) => invoke('auth:login', username, password),
   logout: () => invoke('auth:logout'),
   changeOwnPassword: (current, next) => invoke('auth:changeOwnPassword', current, next),
+  verifyAdminApproval: (adminPassword, action, details) => invoke('auth:verifyAdminApproval', adminPassword, action, details),
   setLanguage: (lang) => invoke('auth:setLanguage', lang),
+  openTouchKeyboard: () => invoke('system:openTouchKeyboard'),
+  closeTouchKeyboard: () => invoke('system:closeTouchKeyboard'),
 
   getDashboard: () => invoke('dashboard:get'),
   getAlertCounts: () => invoke('dashboard:alerts'),
@@ -36,6 +39,7 @@ const api: SmartPosApi = {
   deleteCategory: (id) => invoke('categories:delete', id),
 
   listProducts: (opts) => invoke('products:list', opts),
+  listFrequentProducts: (limit) => invoke('products:frequent', limit),
   getProduct: (id) => invoke('products:get', id),
   lookupByCode: (code) => invoke('products:lookupByCode', code),
   saveProduct: (id, data) => invoke('products:save', id, data),

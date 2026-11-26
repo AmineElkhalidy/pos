@@ -149,7 +149,7 @@ export function BarcodesPage() {
             </div>
           )}
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-800">
               Catalogue des produits & codes-barres ({t.products.internalCodeNote})
             </div>
