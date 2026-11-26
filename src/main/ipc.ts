@@ -529,7 +529,8 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
       html,
       action: 'print',
       printerName: settings.receipt.printerName,
-      copies: settings.receipt.copies
+      copies: settings.receipt.copies,
+      pageSizeMm: { width: settings.receipt.paperWidth, height: 220 }
     })
   })
 
@@ -558,7 +559,8 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     return printingSvc.renderHtmlToPdfOrPrint({
       html,
       action: 'print',
-      printerName: settings.receipt.printerName
+      printerName: settings.receipt.printerName,
+      pageSizeMm: { width: settings.receipt.paperWidth, height: 150 }
     })
   })
 
@@ -584,7 +586,8 @@ export function registerIpcHandlers(getDb: () => DB, getDbPath: () => string): v
     return printingSvc.renderHtmlToPdfOrPrint({
       html,
       action: 'print',
-      printerName: settings.receipt.printerName
+      printerName: settings.receipt.printerName,
+      pageSizeMm: { width: settings.receipt.paperWidth, height: 150 }
     })
   })
 

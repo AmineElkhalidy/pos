@@ -80,22 +80,32 @@ export function buildSaleReceiptHtml(db: DB, saleId: number, overrideWidth?: 58 
     )
     .join('')
 
+  const printableMm = widthMm === 58 ? 48 : 72
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
 <title>Ticket ${escapeHtml(sale.invoiceNo)}</title>
 <style>
-  @page { size: ${widthMm}mm auto; margin: 2mm; }
+  @page { size: ${widthMm}mm auto; margin: 0; }
   * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
   body {
     font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
-    width: ${widthMm - 4}mm;
+    width: ${printableMm}mm;
     margin: 0 auto;
-    padding: 2mm 1mm;
+    padding: 2mm 1.5mm;
     color: #000;
     font-size: ${widthMm === 58 ? '10px' : '11.5px'};
     line-height: 1.35;
+  }
+  @media print {
+    html, body {
+      width: ${printableMm}mm !important;
+      max-width: ${printableMm}mm !important;
+      margin: 0 !important;
+      padding: 1.5mm 1mm !important;
+    }
   }
   .center { text-align: center; }
   .store-title { font-size: ${widthMm === 58 ? '13px' : '15px'}; font-weight: 800; margin-bottom: 2px; }
@@ -155,14 +165,20 @@ export function buildCustomerPaymentReceiptHtml(db: DB, paymentId: number): stri
   const widthMm = settings.receipt.paperWidth
   const dt = new Date(p.createdAt).toLocaleString('fr-MA')
   const logoSrc = settings.receipt.showLogo ? safeLogoDataUrl(settings.store.logoDataUrl) : null
+  const printableMm = widthMm === 58 ? 48 : 72
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
 <title>Reçu ${escapeHtml(p.receiptNo)}</title>
 <style>
-  @page { size: ${widthMm}mm auto; margin: 2mm; }
-  body { font-family: 'Segoe UI', Tahoma, sans-serif; width: ${widthMm - 4}mm; margin: 0 auto; padding: 2mm; font-size: 11.5px; }
+  @page { size: ${widthMm}mm auto; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; width: ${printableMm}mm; margin: 0 auto; padding: 2mm 1.5mm; font-size: ${widthMm === 58 ? '10px' : '11.5px'}; color: #000; }
+  @media print {
+    html, body { width: ${printableMm}mm !important; max-width: ${printableMm}mm !important; margin: 0 !important; padding: 1.5mm 1mm !important; }
+  }
   .center { text-align: center; }
   .title { font-size: 14px; font-weight: 800; }
   .muted { font-size: 0.9em; color: #222; }
@@ -203,14 +219,20 @@ export function buildCashSessionReportHtml(db: DB, sessionId: number): string {
   const settings = getSettings(db)
   const s = computeSession(db, sessionId)
   const widthMm = settings.receipt.paperWidth
+  const printableMm = widthMm === 58 ? 48 : 72
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
 <title>Clôture Caisse #${s.id}</title>
 <style>
-  @page { size: ${widthMm}mm auto; margin: 2mm; }
-  body { font-family: 'Segoe UI', Tahoma, sans-serif; width: ${widthMm - 4}mm; margin: 0 auto; padding: 2mm; font-size: 11px; }
+  @page { size: ${widthMm}mm auto; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; width: ${printableMm}mm; margin: 0 auto; padding: 2mm 1.5mm; font-size: ${widthMm === 58 ? '10px' : '11px'}; color: #000; }
+  @media print {
+    html, body { width: ${printableMm}mm !important; max-width: ${printableMm}mm !important; margin: 0 !important; padding: 1.5mm 1mm !important; }
+  }
   .center { text-align: center; }
   .title { font-size: 14px; font-weight: 800; }
   .divider { border-top: 1px dashed #000; margin: 5px 0; }
@@ -387,22 +409,35 @@ export async function renderHtmlToPdfOrPrint(opts: {
   copies?: number
   pageSizeMm?: { width: number; height: number }
 }): Promise<{ ok: boolean; mode: 'pdf' | 'driver'; filePath?: string; message: string }> {
+  const winWidthPx = opts.pageSizeMm ? Math.max(220, Math.round(opts.pageSizeMm.width * 3.78)) : 420
   const win = new BrowserWindow({
     show: false,
-    width: 420,
+    width: winWidthPx,
     height: 640,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
   })
   try {
     await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(opts.html)}`)
+    let measuredHeightMm = opts.pageSizeMm?.height
+    if (opts.pageSizeMm) {
+      try {
+        const scrollPx = (await win.webContents.executeJavaScript('document.body.scrollHeight')) as number
+        if (Number.isFinite(scrollPx) && scrollPx > 0) {
+          measuredHeightMm = Math.max(40, Math.ceil(scrollPx / 3.78) + 12)
+        }
+      } catch {
+        // fallback to provided height
+      }
+    }
+    const finalPageMm = opts.pageSizeMm ? { width: opts.pageSizeMm.width, height: measuredHeightMm ?? opts.pageSizeMm.height } : undefined
     if (opts.action === 'pdf' && opts.pdfPath) {
       const pdfBuf = await win.webContents.printToPDF({
         printBackground: true,
         margins: { top: 0, bottom: 0, left: 0, right: 0 },
-        pageSize: opts.pageSizeMm
+        pageSize: finalPageMm
           ? {
-              width: Math.max(0.4, Number((opts.pageSizeMm.width / 25.4).toFixed(2))),
-              height: Math.max(0.4, Number((opts.pageSizeMm.height / 25.4).toFixed(2)))
+              width: Math.max(0.4, Number((finalPageMm.width / 25.4).toFixed(2))),
+              height: Math.max(0.4, Number((finalPageMm.height / 25.4).toFixed(2)))
             }
           : 'A4'
       })
@@ -428,7 +463,16 @@ export async function renderHtmlToPdfOrPrint(opts: {
           silent: true,
           printBackground: true,
           deviceName: target.name,
-          copies: opts.copies ?? 1
+          copies: opts.copies ?? 1,
+          margins: { marginType: 'none' },
+          ...(finalPageMm
+            ? {
+                pageSize: {
+                  width: Math.round(finalPageMm.width * 1000),
+                  height: Math.round(finalPageMm.height * 1000)
+                }
+              }
+            : {})
         },
         (success, failureReason) => {
           if (!success) reject(new Error(failureReason || 'PRINT_FAILED'))
